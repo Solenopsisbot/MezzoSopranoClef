@@ -5,6 +5,7 @@ build/
 
 # Loom / Minecraft run dir
 run/
+run-fleet/
 remappedSrc/
 .fabric/
 

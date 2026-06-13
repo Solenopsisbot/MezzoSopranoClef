@@ -120,6 +120,44 @@ servers the default `auth.mode=offline` just works.
 To deploy outside dev: `./gradlew build` → drop `build/libs/mezzosopranoclef-0.1.0.jar` + Fabric API
 into a Fabric `mods/` folder.
 
+## Running multiple bots (a fleet)
+
+Minecraft is one-client-per-JVM (`MinecraftClient.getInstance()` is a global singleton), so
+multiple accounts means multiple **processes** — you can't run two clients in one JVM. The
+`runFleet` task launches a handful of fully independent bots from one command, each with its own
+gameDir (`run-fleet/<name>/`), config, control-plane port, auth-token cache, and identity:
+
+```bash
+./gradlew runFleet -Pbots=alice,bob,carol            # 3 offline bots
+./gradlew runFleet -Pcount=3                          # same, auto-named ClefBot1..3
+./gradlew runFleet -Pbots=a,b -Pserver=play.example.com:25565   # all auto-connect
+./gradlew runFleet -Pbots=a,b -Pdashboard=true        # per-bot web dashboards
+./gradlew runFleet -Pbots=a,b -PdryRun                # print the launch plan, start nothing
+```
+
+Each bot `i` (0-based) gets control port `wsPortBase + i` (default base `8731`) and, with
+`-Pdashboard=true`, dashboard port `dashPortBase + i` (default base `8831`). Output is prefixed
+`[name]`, and Ctrl-C stops the whole fleet. Per-bot dirs live under `run-fleet/` (gitignored).
+
+| `-P` flag | Default | Meaning |
+|---|---|---|
+| `bots` | — | Comma-separated names (e.g. `alice,bob`). Required unless `count` is given. |
+| `count` | — | Auto-name `ClefBot1..N` instead of an explicit list. |
+| `wsPortBase` | `8731` | Control-plane port for the first bot; incremented per bot. |
+| `dashPortBase` | `8831` | Dashboard port base (only used with `dashboard=true`). |
+| `dashboard` | `false` | Serve a per-bot web dashboard. |
+| `server` | — | `host[:port]` to auto-connect all bots to. |
+| `auth` | `offline` | `offline` or `microsoft`. |
+| `clientId` | — | Azure app id for `auth=microsoft` (see below). |
+| `token` | — | Shared control token across the fleet. Omit to keep each bot's own generated one. |
+| `dryRun` | — | Print the per-bot launch plan and exit without starting anything. |
+
+**Offline** (the default) is trivial — each name becomes the in-game username. **Microsoft** works
+too (`-Pauth=microsoft -PclientId=<azure-app-id>`): because each bot has its own gameDir, each
+caches its own refresh token independently. But every bot needs its **own** Microsoft account, and
+the first run prints a device-code prompt per bot (watch the `[name]` lines). Note each bot is a
+full client JVM, so RAM — not CPU — is the practical ceiling on how many you run at once.
+
 ## Build
 
 Requires JDK 21 for the game (Gradle auto-provisions it via the foojay toolchain resolver, so you

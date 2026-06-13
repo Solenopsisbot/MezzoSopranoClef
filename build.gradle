@@ -98,3 +98,237 @@ processResources {
 jar {
     from('LICENSE') { rename { "${it}_${project.archives_base_name}" } }
 }
+
+// ---------------------------------------------------------------------------
+// runFleet — launch a handful (2-5) of INDEPENDENT headless bots at once.
+//
+// Minecraft is one-client-per-JVM (MinecraftClient.getInstance() is a global
+// singleton), so true multi-account = multiple processes, not threads. This
+// task spawns N child client JVMs, each fully isolated:
+//   * its own gameDir under run-fleet/<name>/ (separate config, logs, token cache)
+//   * its own control-plane port (and dashboard port, if enabled)
+//   * its own identity (offline username, or its own Microsoft device-code login)
+//
+// It reuses the EXACT launch spec configured for `runClient` (classpath, main
+// class, JVM args incl. macOS -XstartOnFirstThread, asset dirs), so it tracks
+// Loom automatically and never goes stale. A single `runFleet` build owns all
+// the children, which sidesteps the Gradle build-lock you'd hit by running
+// `./gradlew runClient` N times (it's a long-lived task that never returns).
+//
+// Usage:
+//   ./gradlew runFleet -Pbots=alice,bob,carol
+//   ./gradlew runFleet -Pcount=3                          # -> ClefBot1..3
+//   ./gradlew runFleet -Pbots=a,b -Pserver=play.example.com:25565
+//   ./gradlew runFleet -Pbots=a,b -Pdashboard=true
+//   ./gradlew runFleet -Pbots=a,b -Pauth=microsoft -PclientId=<azure-app-id>
+//   ./gradlew runFleet -Pbots=a,b -PdryRun               # print plan, launch nothing
+//
+// Optional -P props: wsPortBase (8731), dashPortBase (8831), dashboard (false),
+//   server (host[:port]), auth (offline|microsoft), clientId, token (shared
+//   control token; default = each bot keeps its own generated one).
+// Ctrl-C stops the whole fleet.
+// ---------------------------------------------------------------------------
+// Drop earlier duplicate -Dkey=... args so the LAST one (our per-bot override) wins
+// and the command line stays clean. Non -D args (e.g. -XstartOnFirstThread) pass through.
+def fleetDedupeJvm(List args) {
+    def seen = new HashSet()
+    def out = []
+    for (int i = args.size() - 1; i >= 0; i--) {
+        def a = args[i] as String
+        if (a.startsWith('-D') && a.contains('=')) {
+            def key = a.substring(2, a.indexOf('='))
+            if (!seen.add(key)) continue
+        }
+        out << a
+    }
+    out.reverse()
+}
+
+def fleetStripGameDir(List args) {
+    def out = []
+    int i = 0
+    while (i < args.size()) {
+        def a = args[i] as String
+        if (a == '--gameDir' || a == '--gameDirectory') { i += 2; continue }
+        out << a
+        i++
+    }
+    out
+}
+
+def fleetStop(List procs) {
+    procs.each { try { it.proc.destroy() } catch (ignored) {} }
+    procs.each { p ->
+        try {
+            if (!p.proc.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)) p.proc.destroyForcibly()
+        } catch (ignored) {
+            try { p.proc.destroyForcibly() } catch (ignored2) {}
+        }
+    }
+}
+
+tasks.register('runFleet') {
+    group = 'fabric'
+    description = 'Launch multiple independent headless bots, one JVM each (see build.gradle header).'
+    // configureClientLaunch preps DLI/natives/assets; classes+processResources build the mod
+    // itself into build/classes + build/resources (the dev classpath points at those dirs, so
+    // without this the bots boot vanilla MC with the mod missing and no control plane binds).
+    dependsOn 'configureClientLaunch', 'classes', 'processResources'
+
+    doLast {
+        // --- resolve bot names ----------------------------------------------------
+        def names = []
+        def botsProp = project.findProperty('bots')
+        if (botsProp && botsProp.toString().trim()) {
+            names = botsProp.toString().split(',').collect { it.trim() }.findAll { it }
+        } else if (project.findProperty('count')) {
+            int n = project.findProperty('count') as int
+            names = (1..n).collect { "ClefBot${it}".toString() }
+        }
+        if (names.isEmpty()) {
+            throw new GradleException(
+                "runFleet needs bots. Try:  ./gradlew runFleet -Pbots=alice,bob   (or -Pcount=3)")
+        }
+        if (names.size() != names.unique(false).size()) {
+            throw new GradleException("Duplicate bot names are not allowed: ${names}")
+        }
+
+        // --- knobs ----------------------------------------------------------------
+        int wsBase    = (project.findProperty('wsPortBase')   ?: '8731') as int
+        int dashBase  = (project.findProperty('dashPortBase') ?: '8831') as int
+        boolean dashboard = Boolean.parseBoolean((project.findProperty('dashboard') ?: 'false').toString())
+        String authMode = (project.findProperty('auth') ?: 'offline').toString().toLowerCase()
+        boolean microsoft = authMode in ['microsoft', 'msa', 'online']
+        String clientId = project.findProperty('clientId')?.toString()
+        def sharedToken = project.findProperty('token')   // may be null (keep per-bot tokens)
+        boolean dryRun = project.hasProperty('dryRun')
+
+        String srvHost = null; int srvPort = 25565
+        def serverProp = project.findProperty('server')?.toString()
+        if (serverProp) {
+            def parts = serverProp.split(':')
+            srvHost = parts[0]
+            if (parts.length > 1) srvPort = parts[1] as int
+        }
+
+        // sanity: control + dashboard port ranges must not overlap
+        int n = names.size()
+        if (dashboard && wsBase < dashBase + n && dashBase < wsBase + n) {
+            throw new GradleException(
+                "Control ports [${wsBase}..${wsBase + n - 1}] overlap dashboard ports "
+                + "[${dashBase}..${dashBase + n - 1}]. Move -PdashPortBase further away.")
+        }
+        if (microsoft && !clientId) {
+            logger.warn("[fleet] auth=microsoft but no -PclientId given; each bot must have "
+                + "azureClientId set in its config, or login will fail.")
+        }
+
+        // --- single source of truth: the configured runClient launch spec ---------
+        def template = tasks.getByName('runClient')   // Loom RunGameTask (a JavaExec)
+        def javaExe = template.javaLauncher.isPresent()
+            ? template.javaLauncher.get().executablePath.asFile.absolutePath
+            : 'java'
+        def classpath = template.classpath.files.collect { it.absolutePath }.join(File.pathSeparator)
+        def mainClass = template.mainClass.getOrNull()
+        if (!mainClass) throw new GradleException("Could not resolve runClient main class from Loom.")
+
+        // JVM args come from three places depending on Loom/Gradle version — collect all.
+        def baseJvm = []
+        baseJvm += template.jvmArgs.collect { it as String }
+        template.jvmArgumentProviders.each { baseJvm += it.asArguments().collect { a -> a as String } }
+        template.systemProperties.each { k, v -> baseJvm << "-D${k}=${v}".toString() }
+
+        // Program args (minus any --gameDir; we set our own per bot).
+        def baseArgs = []
+        baseArgs += template.args.collect { it as String }
+        template.argumentProviders.each { baseArgs += it.asArguments().collect { a -> a as String } }
+        baseArgs = fleetStripGameDir(baseArgs)
+
+        def baseEnv = [:]
+        template.environment.each { k, v -> if (k != null && v != null) baseEnv[k as String] = v as String }
+
+        def authLabel = microsoft ? 'microsoft' : 'offline'
+        def dashLabel = dashboard ? ', dashboard' : ''
+        println "[fleet] ${dryRun ? 'PLAN for' : 'launching'} ${n} bot(s): ${names.join(', ')} (auth=${authLabel}${dashLabel})"
+
+        def procs = []
+        names.eachWithIndex { name, i ->
+            int wsPort   = wsBase + i
+            int dashPort = dashBase + i
+            File gameDir = file("run-fleet/${name}")
+            gameDir.mkdirs()
+
+            def jvm = new ArrayList(baseJvm)
+            jvm << "-Dmezzoclef.headless=true"
+            jvm << "-Dmezzoclef.ws.port=${wsPort}".toString()
+            if (microsoft) {
+                jvm << "-Dmezzoclef.auth.mode=microsoft"
+                if (clientId) jvm << "-Dmezzoclef.auth.clientId=${clientId}".toString()
+            } else {
+                jvm << "-Dmezzoclef.auth.mode=offline"
+                jvm << "-Dmezzoclef.auth.username=${name}".toString()
+            }
+            if (dashboard) {
+                jvm << "-Dmezzoclef.dashboard=true"
+                jvm << "-Dmezzoclef.dashboard.port=${dashPort}".toString()
+            }
+            if (sharedToken != null) jvm << "-Dmezzoclef.ws.token=${sharedToken}".toString()
+            if (srvHost) {
+                jvm << "-Dmezzoclef.connect.auto=true"
+                jvm << "-Dmezzoclef.connect.host=${srvHost}".toString()
+                jvm << "-Dmezzoclef.connect.port=${srvPort}".toString()
+            }
+            jvm = fleetDedupeJvm(jvm)
+
+            def cmd = []
+            cmd << javaExe
+            cmd.addAll(jvm)
+            cmd << '-cp' << classpath
+            cmd << mainClass
+            cmd.addAll(baseArgs)
+            cmd << '--gameDir' << gameDir.absolutePath
+            cmd = cmd.collect { it as String }
+
+            def where = "ws=127.0.0.1:${wsPort}" + (dashboard ? " dash=http://127.0.0.1:${dashPort}" : "")
+            if (dryRun) {
+                def overrides = jvm.findAll { it.startsWith('-Dmezzoclef.') }
+                println "  - ${name}: ${where} dir=${gameDir}"
+                println "      java=${javaExe}"
+                println "      main=${mainClass}  (classpath: ${template.classpath.files.size()} entries)"
+                println "      overrides: ${overrides.join(' ')}"
+                return
+            }
+
+            def pb = new ProcessBuilder(cmd)
+            pb.directory(gameDir)
+            pb.environment().putAll(baseEnv)
+            pb.redirectErrorStream(true)
+            def proc = pb.start()
+            procs << [name: name, proc: proc]
+            Thread.startDaemon("fleet-${name}") {
+                proc.inputStream.eachLine { line -> println "[${name}] ${line}" }
+            }
+            println "[fleet] ${name}: ${where} dir=${gameDir}"
+        }
+
+        if (dryRun) {
+            println "[fleet] dry run only — nothing launched."
+            return
+        }
+
+        // Reap children on Ctrl-C / JVM exit, and on Gradle task cancellation.
+        def hook = new Thread({ -> fleetStop(procs) })
+        Runtime.runtime.addShutdownHook(hook)
+        try {
+            while (procs.any { it.proc.isAlive() }) {
+                Thread.sleep(500)
+            }
+            println "[fleet] all bots exited."
+        } catch (InterruptedException ignored) {
+            println "[fleet] interrupted — stopping fleet."
+        } finally {
+            try { Runtime.runtime.removeShutdownHook(hook) } catch (ignored) {}
+            fleetStop(procs)
+        }
+    }
+}
