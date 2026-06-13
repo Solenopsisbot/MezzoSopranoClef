@@ -1,0 +1,100 @@
+plugins {
+    id 'fabric-loom' version '1.17.11'
+    id 'java'
+}
+
+base { archivesName = project.archives_base_name }
+version = project.mod_version
+group = project.maven_group
+
+repositories {
+    mavenCentral()
+    // Baritone bundles nether-pathfinder (elytra) as a nested jar. In a production install that
+    // nested jar loads fine, but Loom's *dev* runtime doesn't extract nested jars, so we add it
+    // explicitly here for `runClient` (otherwise Baritone's startup init NoClassDefFounds).
+    maven { name = 'Babbaj'; url = 'https://babbaj.github.io/maven/' }
+    // Auto-download Baritone straight from its GitHub release assets (no maven publishes the
+    // 1.21.8 build). We use the UNoptimized fabric jar on purpose: the "standalone" build
+    // obfuscates the public baritone.api.* package, which would break our reflective bridge.
+    exclusiveContent {
+        forRepository {
+            ivy {
+                name = 'BaritoneGitHubReleases'
+                url = uri('https://github.com/cabaletta/baritone/releases/download/')
+                patternLayout { artifact('v[revision]/[artifact]-[revision](.[ext])') }
+                metadataSources { artifact() }
+            }
+        }
+        filter { includeGroup('baritone-dist') }
+    }
+}
+
+loom {
+    runs {
+        // `gradlew runClient` -> launches the headless bot in dev with auto-downloaded MC.
+        client {
+            client()
+            configName = 'Headless Bot Client'
+            // Headless mode + skip the multiplayer GUI nag. Auth/config read at runtime.
+            vmArgs '-Dmezzoclef.headless=true'
+            // Uncomment to bind the control plane somewhere other than the default:
+            // vmArgs '-Dmezzoclef.ws.host=127.0.0.1', '-Dmezzoclef.ws.port=8731'
+        }
+    }
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
+    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+
+    // Baritone — auto-downloaded + bundled (jar-in-jar) by default. The bot drives it
+    // reflectively (no compile dependency), so it's modRuntimeOnly. Toggle with
+    // -Pbundle_baritone=false (or in gradle.properties) to ship without it.
+    if (project.findProperty('bundle_baritone') != 'false') {
+        modRuntimeOnly "baritone-dist:baritone-unoptimized-fabric:${project.baritone_version}"
+        include "baritone-dist:baritone-unoptimized-fabric:${project.baritone_version}"
+        // dev-runtime only: Baritone's nested elytra native lib (bundled in prod via JiJ).
+        runtimeOnly "dev.babbaj:nether-pathfinder:1.4.1"
+    }
+
+    // NOTE: WebSocket control plane is hand-rolled (RFC6455) over java.net sockets and
+    // JSON uses Minecraft's bundled Gson, so there are intentionally NO extra runtime deps.
+
+    // Tests (JUnit 5).
+    testImplementation platform("org.junit:junit-bom:5.11.4")
+    testImplementation "org.junit.jupiter:junit-jupiter"
+    testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+}
+
+test {
+    useJUnitPlatform()
+    testLogging { events "passed", "skipped", "failed" }
+}
+
+java {
+    // Auto-provisioned by foojay if a local JDK 21 isn't found.
+    toolchain { languageVersion = JavaLanguageVersion.of(21) }
+    withSourcesJar()
+}
+
+tasks.withType(JavaCompile).configureEach {
+    it.options.encoding = 'UTF-8'
+    it.options.release = 21
+}
+
+processResources {
+    inputs.property 'version', project.version
+    inputs.property 'minecraft_version', project.minecraft_version
+    inputs.property 'loader_version', project.loader_version
+    filesMatching('fabric.mod.json') {
+        expand version: project.version,
+               minecraft_version: project.minecraft_version,
+               loader_version: project.loader_version
+    }
+}
+
+jar {
+    from('LICENSE') { rename { "${it}_${project.archives_base_name}" } }
+}

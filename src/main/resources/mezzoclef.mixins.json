@@ -1,0 +1,18 @@
+{
+  "required": true,
+  "package": "dev.mezzo.clef.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [],
+  "client": [
+    "client.MinecraftClientHeadlessMixin",
+    "client.MinecraftClientAccessor",
+    "client.WindowMixin",
+    "client.WindowAccessor",
+    "client.CameraMixin",
+    "client.InGameHudAccessor",
+    "client.BossBarHudAccessor"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

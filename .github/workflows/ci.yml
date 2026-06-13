@@ -1,0 +1,79 @@
+name: CI
+
+# Build + test on every push and pull request (all branches, incl. main/master
+# via the default behaviour). workflow_dispatch is included so the heavy "e2e"
+# job below can be kicked off manually from the Actions tab.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+
+      # `./gradlew build` compiles the mod, runs the JUnit unit + integration
+      # test suites, and remaps the jar (Fabric/Loom) into build/libs.
+      - name: Build (compile, JUnit tests, remap jar)
+        run: ./gradlew build --stacktrace --no-daemon
+
+      - name: Upload mod jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: mod-jar
+          path: build/libs/*.jar
+
+  # ---------------------------------------------------------------------------
+  # Heavy end-to-end job: MANUAL ONLY (workflow_dispatch).
+  #
+  # This is intentionally NOT run on push/PR because it is expensive and slow:
+  #   * it downloads Minecraft client/server assets and a server jar,
+  #   * it boots a real (headless) game client/bot, which needs a virtual
+  #     display (xvfb) and software OpenGL (LIBGL_ALWAYS_SOFTWARE=1).
+  # It is marked continue-on-error so a flaky/slow e2e run can never block CI.
+  # ---------------------------------------------------------------------------
+  e2e:
+    # Only run when triggered by hand from the Actions tab.
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+      - name: Install xvfb (virtual framebuffer for headless GL)
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+
+      - name: Make scripts executable
+        run: chmod +x ./gradlew ./scripts/*.sh
+
+      # Run the e2e harness under a virtual display, forcing software GL so the
+      # game can render without a real GPU.
+      - name: Run e2e under virtual display
+        run: xvfb-run -a ./scripts/e2e.sh
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'

@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "id": "mezzoclef",
+  "version": "${version}",
+  "name": "MezzoSopranoClef",
+  "description": "Headless, render-on-demand Minecraft Fabric client built for botting. Microsoft OAuth + offline auth, WebSocket/JSON control plane, on-demand offscreen screenshots, optional Baritone pathfinding.",
+  "authors": [ "Solenopsisbot" ],
+  "contact": {},
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "main": [ "dev.mezzo.clef.MezzoClef" ],
+    "client": [ "dev.mezzo.clef.ClefClient" ],
+    "preLaunch": [ "dev.mezzo.clef.ClefPreLaunch" ]
+  },
+  "mixins": [
+    "mezzoclef.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=${loader_version}",
+    "minecraft": ">=1.21.8 <1.22",
+    "java": ">=21",
+    "fabric-api": "*"
+  },
+  "suggests": {
+    "baritone": "*"
+  }
+}

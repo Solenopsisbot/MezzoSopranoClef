@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>MezzoSopranoClef — Control</title>
+<style>
+  :root { --bg:#15171c; --panel:#1e2128; --edge:#2c303a; --fg:#e6e8ec; --muted:#8b93a1;
+          --accent:#5ad1a0; --bad:#e0584f; --btn:#2a2f3a; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+  header { display:flex; gap:8px; align-items:center; flex-wrap:wrap; padding:10px 14px; background:var(--panel); border-bottom:1px solid var(--edge); position:sticky; top:0; }
+  header h1 { font-size:14px; margin:0 10px 0 0; color:var(--accent); letter-spacing:.5px; }
+  input, button, select { background:var(--btn); color:var(--fg); border:1px solid var(--edge); border-radius:6px; padding:5px 8px; font:inherit; }
+  input { min-width:60px; }
+  button { cursor:pointer; }
+  button:hover { border-color:var(--accent); }
+  button:active { background:#333a47; }
+  #dot { width:10px; height:10px; border-radius:50%; background:var(--bad); display:inline-block; }
+  .wrap { display:grid; grid-template-columns:minmax(320px,1fr) minmax(340px,1fr); gap:12px; padding:12px; align-items:start; }
+  .panel { background:var(--panel); border:1px solid var(--edge); border-radius:10px; padding:12px; }
+  .panel h2 { font-size:12px; text-transform:uppercase; letter-spacing:1px; color:var(--muted); margin:0 0 10px; }
+  .row { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-bottom:8px; }
+  .row label { color:var(--muted); min-width:26px; }
+  .grid3 { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; max-width:200px; }
+  .kbd { text-align:center; }
+  pre { background:#12141a; border:1px solid var(--edge); border-radius:8px; padding:10px; margin:0; max-height:240px; overflow:auto; white-space:pre-wrap; word-break:break-word; }
+  #events { height:240px; overflow:auto; }
+  #events div { padding:2px 0; border-bottom:1px solid #20242d; }
+  .ev-chat{color:#9fd0ff} .ev-health{color:#ffcf6b} .ev-death{color:var(--bad)} .ev-join{color:var(--accent)} .ev-leave{color:#c98} 
+  img#shot { width:100%; border:1px solid var(--edge); border-radius:8px; background:#000; image-rendering:pixelated; }
+  .muted{color:var(--muted)} .ok{color:var(--accent)} .bad{color:var(--bad)}
+  .pill { font-size:11px; padding:2px 6px; border:1px solid var(--edge); border-radius:20px; color:var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>MezzoSopranoClef</h1>
+  <span id="dot"></span><span id="connstate" class="muted">disconnected</span>
+  <input id="wsurl" size="26"/>
+  <input id="token" placeholder="token (optional)" size="14"/>
+  <button id="connectBtn">Connect</button>
+  <span id="ident" class="pill">—</span>
+  <label class="muted"><input type="checkbox" id="wasd"/> WASD control</label>
+</header>
+
+<div class="wrap">
+  <!-- LEFT: controls -->
+  <div>
+    <div class="panel">
+      <h2>Session &amp; World</h2>
+      <div class="row">
+        <button onclick="call('status').then(showStatus)">Status</button>
+        <button onclick="send('players')">Players</button>
+        <button onclick="send('inventory')">Inventory</button>
+        <button onclick="send('entities',{radius:24})">Entities</button>
+        <label class="muted"><input type="checkbox" id="autostatus"/> auto</label>
+      </div>
+      <div class="row">
+        <input id="host" placeholder="host" value="localhost" size="14"/>
+        <label>port</label><input id="port" type="number" value="25565" size="6"/>
+        <button onclick="send('connect',{host:val('host'),port:+val('port')})">Connect server</button>
+        <button onclick="send('disconnect')">Disconnect</button>
+      </div>
+      <div class="row">
+        <input id="chat" placeholder="chat or /command" size="28"/>
+        <button onclick="send('chat',{message:val('chat')})">Send</button>
+      </div>
+      <pre id="status">no status yet</pre>
+    </div>
+
+    <div class="panel" style="margin-top:12px">
+      <h2>Movement &amp; Look</h2>
+      <div class="row">
+        <div class="grid3">
+          <span></span><button class="kbd" onmousedown="hold('forward')" onmouseup="release()">W</button><span></span>
+          <button class="kbd" onmousedown="hold('left')" onmouseup="release()">A</button>
+          <button class="kbd" onmousedown="hold('backward')" onmouseup="release()">S</button>
+          <button class="kbd" onmousedown="hold('right')" onmouseup="release()">D</button>
+        </div>
+        <div>
+          <label class="muted"><input type="checkbox" id="m_jump"/> jump</label><br/>
+          <label class="muted"><input type="checkbox" id="m_sprint"/> sprint</label><br/>
+          <label class="muted"><input type="checkbox" id="m_sneak"/> sneak</label>
+        </div>
+        <button onclick="send('stopMove')">Stop</button>
+      </div>
+      <div class="row">
+        <label>yaw</label><input id="yaw" type="number" step="5" value="0" size="6"/>
+        <label>pitch</label><input id="pitch" type="number" step="5" value="0" size="6"/>
+        <button onclick="send('look',{yaw:+val('yaw'),pitch:+val('pitch')})">Look</button>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:12px">
+      <h2>Actions</h2>
+      <div class="row">
+        <label>x</label><input id="ax" type="number" value="0" size="6"/>
+        <label>y</label><input id="ay" type="number" value="0" size="6"/>
+        <label>z</label><input id="az" type="number" value="0" size="6"/>
+        <select id="aface"><option>up</option><option>down</option><option>north</option><option>south</option><option>east</option><option>west</option></select>
+      </div>
+      <div class="row">
+        <button onclick="send('mine',blk({face:val('aface')}))">Mine</button>
+        <button onclick="send('breakBlock',blk())">Break</button>
+        <button onclick="send('place',blk({face:val('aface')}))">Place</button>
+        <button onclick="send('blockAt',blk())">Block?</button>
+        <button onclick="send('stopMine')">Stop mine</button>
+      </div>
+      <div class="row">
+        <button onclick="send('use')">Use</button>
+        <button onclick="send('attack')">Attack nearest</button>
+        <label>slot</label><input id="slot" type="number" min="0" max="8" value="0" size="4"/>
+        <button onclick="send('setSlot',{slot:+val('slot')})">Set slot</button>
+        <button onclick="send('dropItem',{all:false})">Drop</button>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:12px">
+      <h2>Navigation (Baritone)</h2>
+      <div class="row">
+        <button onclick="send('goto',{x:+val('ax'),y:+val('ay'),z:+val('az')})">Goto x/y/z</button>
+        <button onclick="send('nav.stop')">Stop path</button>
+        <button onclick="call('nav.status').then(r=>log('nav',r))">Nav status</button>
+      </div>
+      <div class="row">
+        <input id="bcmd" placeholder="raw baritone cmd e.g. mine diamond_ore" size="30"/>
+        <button onclick="send('baritone',{command:val('bcmd')})">Run</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT: screenshot, console, events -->
+  <div>
+    <div class="panel">
+      <h2>Screenshot (GPU-free)</h2>
+      <div class="row">
+        <label>w</label><input id="sw" type="number" value="640" size="6"/>
+        <label>h</label><input id="sh" type="number" value="360" size="6"/>
+        <label>yaw</label><input id="syaw" type="number" value="" placeholder="player" size="6"/>
+        <label>pitch</label><input id="spitch" type="number" value="" placeholder="player" size="6"/>
+        <button onclick="capture()">Capture</button>
+        <span id="shotinfo" class="muted"></span>
+      </div>
+      <img id="shot" alt="(screenshot appears here)"/>
+    </div>
+
+    <div class="panel" style="margin-top:12px">
+      <h2>Console</h2>
+      <div class="row">
+        <input id="ccmd" placeholder="cmd" size="12"/>
+        <input id="cargs" placeholder='{"key":"value"}' size="22"/>
+        <button onclick="rawSend()">Send</button>
+      </div>
+      <pre id="out">responses appear here</pre>
+    </div>
+
+    <div class="panel" style="margin-top:12px">
+      <h2>Events <label class="muted" style="float:right"><input type="checkbox" id="subEvents" checked/> subscribe</label></h2>
+      <div id="events"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const WS_PORT = {{WS_PORT}};
+let ws=null, nextId=1, pending=new Map(), keys={}, holdKey=null;
+
+document.getElementById('wsurl').value = "ws://" + location.hostname + ":" + WS_PORT;
+const $ = id => document.getElementById(id);
+const val = id => $(id).value;
+const blk = (extra={}) => Object.assign({x:+val('ax'),y:+val('ay'),z:+val('az')}, extra);
+
+function setConn(state){
+  $('dot').style.background = state==='connected' ? 'var(--accent)' : (state==='connecting'?'#ffcf6b':'var(--bad)');
+  $('connstate').textContent = state;
+}
+
+function connect(){
+  if(ws){ ws.close(); ws=null; }
+  setConn('connecting');
+  ws = new WebSocket(val('wsurl'));
+  ws.onopen = () => {
+    setConn('connected');
+    const tok = val('token');
+    if(tok) call('hello',{token:tok});
+    if($('subEvents').checked) call('subscribe',{}); // omit events => all
+    call('auth.status').then(r=>$('ident').textContent = r.username ? (r.username+' ('+r.type+')') : '—').catch(()=>{});
+    call('status').then(showStatus).catch(()=>{});
+  };
+  ws.onclose = () => { setConn('disconnected'); };
+  ws.onerror = () => { setConn('disconnected'); };
+  ws.onmessage = ev => {
+    let m; try { m = JSON.parse(ev.data); } catch { return; }
+    if(m.event){ onEvent(m.event, m.data); return; }
+    const p = pending.get(m.id); if(p){ pending.delete(m.id); m.ok ? p.resolve(m.result) : p.reject(new Error(m.error)); }
+  };
+}
+
+function call(cmd, args={}){
+  return new Promise((resolve,reject)=>{
+    if(!ws || ws.readyState!==1){ reject(new Error('not connected')); return; }
+    const id = String(nextId++);
+    pending.set(id, {resolve,reject});
+    ws.send(JSON.stringify({id,cmd,args}));
+    setTimeout(()=>{ if(pending.has(id)){ pending.delete(id); reject(new Error('timeout')); } }, 65000);
+  });
+}
+// send + show in console output
+function send(cmd, args={}){ call(cmd,args).then(r=>log(cmd,r)).catch(e=>log(cmd,{error:e.message})); }
+function rawSend(){ let a={}; try{ a = val('cargs')?JSON.parse(val('cargs')):{}; }catch(e){ return log('parse',{error:'bad JSON args'}); } send(val('ccmd'),a); }
+function log(cmd, obj){ $('out').textContent = "» "+cmd+"\n"+JSON.stringify(obj,null,2); }
+
+function showStatus(s){
+  $('status').textContent = JSON.stringify(s,null,2);
+}
+
+function onEvent(name, data){
+  const box = $('events');
+  const div = document.createElement('div');
+  div.className = 'ev-'+name;
+  const t = new Date().toLocaleTimeString();
+  div.textContent = `[${t}] ${name}: ` + JSON.stringify(data);
+  box.prepend(div);
+  while(box.children.length>200) box.removeChild(box.lastChild);
+}
+
+// ---- screenshot ----
+function capture(){
+  const args = {width:+val('sw'), height:+val('sh')};
+  if(val('syaw')!=='') args.yaw=+val('syaw');
+  if(val('spitch')!=='') args.pitch=+val('spitch');
+  $('shotinfo').textContent='capturing…';
+  call('screenshot', args).then(r=>{
+    $('shot').src = 'data:image/png;base64,'+r.base64;
+    $('shotinfo').textContent = r.backend+' · '+r.bytes+' bytes';
+  }).catch(e=>$('shotinfo').textContent='error: '+e.message);
+}
+
+// ---- movement: button hold + WASD keyboard ----
+function moveState(){
+  return {forward:!!keys.forward, backward:!!keys.backward, left:!!keys.left, right:!!keys.right,
+          jump:$('m_jump').checked||!!keys.jump, sprint:$('m_sprint').checked||!!keys.sprint, sneak:$('m_sneak').checked||!!keys.sneak};
+}
+function pushMove(){ if(ws&&ws.readyState===1) call('move', moveState()).catch(()=>{}); }
+function hold(dir){ keys[dir]=true; pushMove(); }
+function release(){ keys={}; call('stopMove').catch(()=>{}); }
+
+const KEYMAP = {KeyW:'forward',KeyS:'backward',KeyA:'left',KeyD:'right',Space:'jump',ShiftLeft:'sneak',ControlLeft:'sprint'};
+addEventListener('keydown', e=>{ if(!$('wasd').checked) return; const k=KEYMAP[e.code]; if(k){ e.preventDefault(); if(!keys[k]){keys[k]=true; pushMove();} } });
+addEventListener('keyup',   e=>{ if(!$('wasd').checked) return; const k=KEYMAP[e.code]; if(k){ e.preventDefault(); delete keys[k]; (Object.keys(keys).length?pushMove():call('stopMove').catch(()=>{})); } });
+
+$('connectBtn').onclick = connect;
+setInterval(()=>{ if($('autostatus').checked && ws && ws.readyState===1) call('status').then(showStatus).catch(()=>{}); }, 2000);
+connect();
+</script>
+</body>
+</html>

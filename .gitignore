@@ -1,0 +1,34 @@
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# Loom / Minecraft run dir
+run/
+remappedSrc/
+.fabric/
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.settings/
+.classpath
+.project
+out/
+bin/
+eclipse/
+
+# OS
+.DS_Store
+
+# Secrets — never commit auth tokens/caches
+*.token
+auth-cache.json
+
+# e2e test artifacts (server jar, world, logs, screenshots)
+e2e/server/
+e2e/*.log
+e2e/*.png

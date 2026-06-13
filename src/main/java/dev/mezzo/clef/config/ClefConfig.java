@@ -1,0 +1,174 @@
+package dev.mezzo.clef.config;
+
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import dev.mezzo.clef.MezzoClef;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.security.SecureRandom;
+import java.util.Base64;
+
+/**
+ * JSON-backed configuration. Uses Minecraft's bundled Gson (no extra dependency).
+ * Anything here can also be overridden by a {@code -Dmezzoclef.*} system property,
+ * resolved in {@link #applySystemPropertyOverrides()}.
+ */
+public final class ClefConfig {
+
+    private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
+
+    public Auth auth = new Auth();
+    public Connection connection = new Connection();
+    public Control control = new Control();
+    public Screenshot screenshot = new Screenshot();
+    public boolean headless = true;
+    /** Per-loop sleep (ms) while in-world rendering is skipped — keeps idle CPU low. Higher =
+     *  lower CPU but slightly more command latency. Must stay well under 50ms to keep 20 TPS. */
+    public int headlessLoopSleepMs = 20;
+
+    public static final class Auth {
+        /** "offline" or "microsoft". */
+        public String mode = "offline";
+        /** Offline username (offline mode only). */
+        public String offlineUsername = "ClefBot";
+        /**
+         * Azure AD application (public client) ID for the Microsoft device-code flow.
+         * You MUST register your own — see README "Microsoft auth setup". The well-known
+         * Minecraft launcher client id is not redistributable.
+         */
+        public String azureClientId = "";
+        /** Where to cache refresh/MC tokens so re-auth is silent. Relative to game dir. */
+        public String tokenCacheFile = "mezzoclef/auth-cache.json";
+    }
+
+    public static final class Connection {
+        /** Auto-join this server once authed + in-game. Empty = stay on title screen. */
+        public boolean autoConnect = false;
+        public String serverHost = "localhost";
+        public int serverPort = 25565;
+        /** Automatically respawn when the bot dies (a corpse can't bot). */
+        public boolean autoRespawn = true;
+    }
+
+    public static final class Control {
+        public boolean enabled = true;
+        public String host = "127.0.0.1";
+        public int port = 8731;
+        /**
+         * Shared secret; clients must send it in the "hello" frame. A fresh config file gets a
+         * random token so browser pages cannot silently drive a local bot. Empty disables auth.
+         */
+        public String authToken = "";
+        /**
+         * Comma-separated browser origins allowed to open the WebSocket, in addition to the
+         * built-in dashboard origin when enabled. CLI/script clients usually send no Origin and
+         * are still accepted.
+         */
+        public String allowedOrigins = "";
+        /** Serve a built-in browser dashboard (static page that talks to the control plane). */
+        public boolean dashboard = false;
+        public int dashboardPort = 8732;
+    }
+
+    public static final class Screenshot {
+        /**
+         * "software" (default) = CPU voxel raycaster, needs NO GPU, runs anywhere, fully tested.
+         * "gl" = high-fidelity offscreen render via the real client renderer (needs a GL context;
+         * experimental — see README).
+         */
+        public String backend = "software";
+        public int defaultWidth = 1280;
+        public int defaultHeight = 720;
+        public float defaultFov = 70.0f;
+        /** Hard ceiling to avoid OOMing on absurd resolutions. */
+        public int maxWidth = 3840;
+        public int maxHeight = 2160;
+        /** Hard cap for width*height, independent of each side's max. Default is 4K UHD. */
+        public int maxPixels = 3840 * 2160;
+        /** software backend: half-size of the captured cube + max ray length (blocks). Bigger =
+         *  see further but each capture reads ~(2r)^3 blocks on the client thread, so keep it
+         *  modest for frequent captures. */
+        public int maxRayDistance = 64;
+        /** software backend: max nearby entities (players/mobs/items) drawn per capture. */
+        public int maxEntities = 64;
+    }
+
+    // ---- load / save ----------------------------------------------------------------
+
+    public static ClefConfig loadOrCreate(Path path) {
+        ClefConfig cfg;
+        try {
+            if (Files.exists(path)) {
+                String json = Files.readString(path, StandardCharsets.UTF_8);
+                cfg = GSON.fromJson(json, ClefConfig.class);
+                if (cfg == null) cfg = new ClefConfig();
+            } else {
+                cfg = new ClefConfig();
+                cfg.control.authToken = generateAuthToken();
+                cfg.save(path);
+                MezzoClef.LOG.info("Wrote default config to {}", path);
+                MezzoClef.LOG.info("Generated control-plane auth token in {}", path);
+            }
+        } catch (Exception e) {
+            MezzoClef.LOG.error("Failed to read config {}, using defaults", path, e);
+            cfg = new ClefConfig();
+        }
+        cfg.applySystemPropertyOverrides();
+        return cfg;
+    }
+
+    public void save(Path path) {
+        try {
+            Files.createDirectories(path.getParent());
+            Files.writeString(path, GSON.toJson(this), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            MezzoClef.LOG.error("Failed to write config {}", path, e);
+        }
+    }
+
+    /** -Dmezzoclef.headless / -Dmezzoclef.ws.host / -Dmezzoclef.ws.port etc. win over the file. */
+    public void applySystemPropertyOverrides() {
+        String hl = System.getProperty("mezzoclef.headless");
+        if (hl != null) headless = Boolean.parseBoolean(hl);
+
+        String wsHost = System.getProperty("mezzoclef.ws.host");
+        if (wsHost != null) control.host = wsHost;
+        String wsPort = System.getProperty("mezzoclef.ws.port");
+        if (wsPort != null) try { control.port = Integer.parseInt(wsPort); } catch (NumberFormatException ignored) {}
+        String wsToken = System.getProperty("mezzoclef.ws.token");
+        if (wsToken != null) control.authToken = wsToken;
+        String wsOrigins = System.getProperty("mezzoclef.ws.allowedOrigins");
+        if (wsOrigins != null) control.allowedOrigins = wsOrigins;
+
+        String dash = System.getProperty("mezzoclef.dashboard");
+        if (dash != null) control.dashboard = Boolean.parseBoolean(dash);
+        String dashPort = System.getProperty("mezzoclef.dashboard.port");
+        if (dashPort != null) try { control.dashboardPort = Integer.parseInt(dashPort); } catch (NumberFormatException ignored) {}
+
+        String authMode = System.getProperty("mezzoclef.auth.mode");
+        if (authMode != null) auth.mode = authMode;
+        String user = System.getProperty("mezzoclef.auth.username");
+        if (user != null) auth.offlineUsername = user;
+        String cid = System.getProperty("mezzoclef.auth.clientId");
+        if (cid != null) auth.azureClientId = cid;
+
+        String ca = System.getProperty("mezzoclef.connect.auto");
+        if (ca != null) connection.autoConnect = Boolean.parseBoolean(ca);
+        String ch = System.getProperty("mezzoclef.connect.host");
+        if (ch != null) connection.serverHost = ch;
+        String cp = System.getProperty("mezzoclef.connect.port");
+        if (cp != null) try { connection.serverPort = Integer.parseInt(cp); } catch (NumberFormatException ignored) {}
+
+        String sb = System.getProperty("mezzoclef.screenshot.backend");
+        if (sb != null) screenshot.backend = sb;
+    }
+
+    private static String generateAuthToken() {
+        byte[] bytes = new byte[24];
+        new SecureRandom().nextBytes(bytes);
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+    }
+}
