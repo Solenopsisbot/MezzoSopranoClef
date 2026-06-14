@@ -12,7 +12,8 @@
     "client.CameraMixin",
     "client.InGameHudAccessor",
     "client.BossBarHudAccessor",
-    "client.RenderSystemNoGlMixin"
+    "client.RenderSystemNoGlMixin",
+    "client.SoundDisableMixin"
   ],
   "injectors": {
     "defaultRequire": 1

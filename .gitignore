@@ -30,7 +30,14 @@ eclipse/
 *.token
 auth-cache.json
 
-# e2e test artifacts (server jar, world, logs, screenshots)
+# e2e test artifacts (server jar, world, logs, screenshots, bench output)
 e2e/server/
 e2e/*.log
 e2e/*.png
+e2e/*.out
+e2e/*.pid
+
+# Run logs + Python probe/benchmark bytecode caches
+logs/
+__pycache__/
+*.pyc

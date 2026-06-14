@@ -32,6 +32,28 @@ public final class CoreCommands {
             return o;
         });
 
+        d.register("stats", "runtime perf counters: process CPU time, suppressed sound work, skipped frames", ctx -> {
+            HeadlessController hc = HeadlessController.get();
+            JsonObject o = new JsonObject();
+            o.addProperty("uptimeMs", java.lang.management.ManagementFactory.getRuntimeMXBean().getUptime());
+            ProcessHandle.current().info().totalCpuDuration()
+                    .ifPresent(cpu -> o.addProperty("cpuMs", cpu.toMillis()));
+            o.addProperty("soundsSuppressed", hc.soundsSuppressed());
+            o.addProperty("skippedFrames", hc.skippedFrames());
+            o.addProperty("disableSound", hc.isDisableSound());
+            o.addProperty("noGl", hc.isNoGl());
+            o.addProperty("muteAudio", hc.isMuteAudio());
+            return o;
+        });
+
+        d.register("optimize", "toggle the muted-sound short-circuit at runtime {sound?}", ctx -> {
+            HeadlessController hc = HeadlessController.get();
+            if (ctx.has("sound")) hc.setDisableSound(ctx.bool("sound", true));
+            JsonObject o = new JsonObject();
+            o.addProperty("disableSound", hc.isDisableSound());
+            return o;
+        });
+
         d.register("subscribe", "stream events to this connection {events:[...] or omit for all}", ctx -> {
             java.util.Set<String> subs = java.util.concurrent.ConcurrentHashMap.newKeySet();
             if (ctx.args.has("events") && ctx.args.get("events").isJsonArray()) {

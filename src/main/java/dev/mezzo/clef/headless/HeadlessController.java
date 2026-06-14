@@ -45,6 +45,17 @@ public final class HeadlessController {
     /** Frames the normal loop has skipped — handy telemetry over the control plane. */
     private final AtomicLong skippedFrames = new AtomicLong();
 
+    /** Sound plays we suppressed while muted — telemetry for the footprint-hygiene sound disable. */
+    private final AtomicLong soundsSuppressed = new AtomicLong();
+
+    /**
+     * Kill switch for the muted-sound short-circuit (default on). Lets us toggle it at runtime to
+     * A/B the cost without otherwise changing the headless setup: launch with
+     * {@code -Dmezzoclef.disable.sound=false} or flip it via the {@code optimize} control command.
+     */
+    private volatile boolean disableSound =
+            !"false".equalsIgnoreCase(System.getProperty("mezzoclef.disable.sound"));
+
     public static HeadlessController get() {
         return INSTANCE;
     }
@@ -103,6 +114,22 @@ public final class HeadlessController {
 
     public long skippedFrames() {
         return skippedFrames.get();
+    }
+
+    public boolean isDisableSound() {
+        return disableSound;
+    }
+
+    public void setDisableSound(boolean disableSound) {
+        this.disableSound = disableSound;
+    }
+
+    public long noteSoundSuppressed() {
+        return soundsSuppressed.incrementAndGet();
+    }
+
+    public long soundsSuppressed() {
+        return soundsSuppressed.get();
     }
 
     private HeadlessController() {}
