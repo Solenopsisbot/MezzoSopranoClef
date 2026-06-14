@@ -2,6 +2,7 @@ package dev.mezzo.clef.api.commands;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import dev.mezzo.clef.api.ApiException;
 import dev.mezzo.clef.api.CommandDispatcher;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.entity.Entity;
@@ -39,11 +40,11 @@ public final class ActionCommands {
         });
 
         d.register("mine", "start breaking a block over time {x,y,z,face?}", ctx -> {
-            BlockPos pos = new BlockPos(ctx.i("x", 0), ctx.i("y", 0), ctx.i("z", 0));
+            BlockPos pos = new BlockPos(ctx.requireInt("x"), ctx.requireInt("y"), ctx.requireInt("z"));
             Direction face = parseFace(ctx.str("face", "up"));
             return ctx.onMain(() -> {
                 MinecraftClient mc = MinecraftClient.getInstance();
-                if (mc.player == null) throw new IllegalStateException("not in world");
+                if (mc.player == null) throw ApiException.notInWorld();
                 ctx.server.services.actions.startMining(pos, face);
                 JsonObject o = new JsonObject();
                 o.addProperty("mining", true);
@@ -59,7 +60,7 @@ public final class ActionCommands {
         }));
 
         d.register("breakBlock", "instantly break a block (creative) {x,y,z}", ctx -> {
-            BlockPos pos = new BlockPos(ctx.i("x", 0), ctx.i("y", 0), ctx.i("z", 0));
+            BlockPos pos = new BlockPos(ctx.requireInt("x"), ctx.requireInt("y"), ctx.requireInt("z"));
             return ctx.onMain(() -> {
                 boolean ok = ctx.server.services.actions.breakInstant(MinecraftClient.getInstance(), pos);
                 JsonObject o = new JsonObject();
@@ -69,11 +70,11 @@ public final class ActionCommands {
         });
 
         d.register("place", "right-click/place against a block face {x,y,z,face?}", ctx -> {
-            BlockPos pos = new BlockPos(ctx.i("x", 0), ctx.i("y", 0), ctx.i("z", 0));
+            BlockPos pos = new BlockPos(ctx.requireInt("x"), ctx.requireInt("y"), ctx.requireInt("z"));
             Direction face = parseFace(ctx.str("face", "up"));
             return ctx.onMain(() -> {
                 MinecraftClient mc = MinecraftClient.getInstance();
-                if (mc.player == null) throw new IllegalStateException("not in world");
+                if (mc.player == null) throw ApiException.notInWorld();
                 ctx.server.services.actions.interactBlock(mc, pos, face);
                 JsonObject o = new JsonObject();
                 o.addProperty("placed", true);
@@ -85,7 +86,7 @@ public final class ActionCommands {
             Hand hand = "off".equalsIgnoreCase(ctx.str("hand", "main")) ? Hand.OFF_HAND : Hand.MAIN_HAND;
             return ctx.onMain(() -> {
                 MinecraftClient mc = MinecraftClient.getInstance();
-                if (mc.player == null) throw new IllegalStateException("not in world");
+                if (mc.player == null) throw ApiException.notInWorld();
                 ctx.server.services.actions.useItem(mc, hand);
                 JsonObject o = new JsonObject();
                 o.addProperty("used", true);
@@ -97,9 +98,9 @@ public final class ActionCommands {
             Integer id = ctx.has("entityId") ? ctx.i("entityId", -1) : null;
             return ctx.onMain(() -> {
                 MinecraftClient mc = MinecraftClient.getInstance();
-                if (mc.player == null || mc.world == null) throw new IllegalStateException("not in world");
+                if (mc.player == null || mc.world == null) throw ApiException.notInWorld();
                 Entity target = id != null ? mc.world.getEntityById(id) : nearest(mc, 4.0);
-                if (target == null) throw new IllegalStateException("no target in range");
+                if (target == null) throw ApiException.notFound("no target in range");
                 ctx.server.services.actions.attackEntity(mc, target);
                 JsonObject o = new JsonObject();
                 o.addProperty("attacked", target.getId());
@@ -109,10 +110,11 @@ public final class ActionCommands {
         });
 
         d.register("setSlot", "select hotbar slot {slot 0-8}", ctx -> {
-            int slot = Math.max(0, Math.min(8, ctx.i("slot", 0)));
+            int slot = ctx.requireInt("slot");
+            if (slot < 0 || slot > 8) throw ApiException.badArgs("slot must be 0-8");
             return ctx.onMain(() -> {
                 MinecraftClient mc = MinecraftClient.getInstance();
-                if (mc.player == null) throw new IllegalStateException("not in world");
+                if (mc.player == null) throw ApiException.notInWorld();
                 mc.player.getInventory().setSelectedSlot(slot);
                 JsonObject o = new JsonObject();
                 o.addProperty("slot", slot);
@@ -124,7 +126,7 @@ public final class ActionCommands {
             boolean all = ctx.bool("all", false);
             return ctx.onMain(() -> {
                 MinecraftClient mc = MinecraftClient.getInstance();
-                if (mc.player == null) throw new IllegalStateException("not in world");
+                if (mc.player == null) throw ApiException.notInWorld();
                 boolean ok = mc.player.dropSelectedItem(all);
                 JsonObject o = new JsonObject();
                 o.addProperty("dropped", ok);
@@ -134,7 +136,7 @@ public final class ActionCommands {
 
         d.register("inventory", "list inventory contents", ctx -> ctx.onMain(() -> {
             MinecraftClient mc = MinecraftClient.getInstance();
-            if (mc.player == null) throw new IllegalStateException("not in world");
+            if (mc.player == null) throw ApiException.notInWorld();
             PlayerInventory inv = mc.player.getInventory();
             JsonObject o = new JsonObject();
             o.addProperty("selectedSlot", inv.getSelectedSlot());
@@ -157,7 +159,7 @@ public final class ActionCommands {
             double radius = ctx.d("radius", 16);
             return ctx.onMain(() -> {
                 MinecraftClient mc = MinecraftClient.getInstance();
-                if (mc.player == null || mc.world == null) throw new IllegalStateException("not in world");
+                if (mc.player == null || mc.world == null) throw ApiException.notInWorld();
                 double r2 = radius * radius;
                 JsonArray arr = new JsonArray();
                 for (Entity e : mc.world.getEntities()) {
@@ -179,10 +181,10 @@ public final class ActionCommands {
         });
 
         d.register("blockAt", "block id at {x,y,z}", ctx -> {
-            BlockPos pos = new BlockPos(ctx.i("x", 0), ctx.i("y", 0), ctx.i("z", 0));
+            BlockPos pos = new BlockPos(ctx.requireInt("x"), ctx.requireInt("y"), ctx.requireInt("z"));
             return ctx.onMain(() -> {
                 MinecraftClient mc = MinecraftClient.getInstance();
-                if (mc.world == null) throw new IllegalStateException("not in world");
+                if (mc.world == null) throw ApiException.notInWorld();
                 var state = mc.world.getBlockState(pos);
                 JsonObject o = new JsonObject();
                 o.addProperty("block", Registries.BLOCK.getId(state.getBlock()).toString());
@@ -192,13 +194,13 @@ public final class ActionCommands {
         });
 
         d.register("interactEntity", "right-click an entity — mount/trade/breed/leash {entityId, hand?}", ctx -> {
-            int id = ctx.i("entityId", -1);
+            int id = ctx.requireInt("entityId");
             Hand hand = "off".equalsIgnoreCase(ctx.str("hand", "main")) ? Hand.OFF_HAND : Hand.MAIN_HAND;
             return ctx.onMain(() -> {
                 MinecraftClient mc = MinecraftClient.getInstance();
-                if (mc.player == null || mc.world == null || mc.interactionManager == null) throw new IllegalStateException("not in world");
+                if (mc.player == null || mc.world == null || mc.interactionManager == null) throw ApiException.notInWorld();
                 Entity e = mc.world.getEntityById(id);
-                if (e == null) throw new IllegalStateException("no entity with id " + id);
+                if (e == null) throw ApiException.notFound("no entity with id " + id);
                 ActionResult r = mc.interactionManager.interactEntity(mc.player, e, hand);
                 JsonObject o = new JsonObject();
                 o.addProperty("interacted", id);
@@ -210,7 +212,7 @@ public final class ActionCommands {
 
         d.register("swapHands", "swap main-hand and off-hand items", ctx -> ctx.onMain(() -> {
             MinecraftClient mc = MinecraftClient.getInstance();
-            if (mc.player == null || mc.getNetworkHandler() == null) throw new IllegalStateException("not in world");
+            if (mc.player == null || mc.getNetworkHandler() == null) throw ApiException.notInWorld();
             mc.getNetworkHandler().sendPacket(new PlayerActionC2SPacket(
                     PlayerActionC2SPacket.Action.SWAP_ITEM_WITH_OFFHAND, BlockPos.ORIGIN, Direction.DOWN));
             JsonObject o = new JsonObject();
@@ -219,11 +221,11 @@ public final class ActionCommands {
         }));
 
         d.register("pickBlock", "pick the block at {x,y,z} into the hotbar (like middle-click)", ctx -> {
-            BlockPos pos = new BlockPos(ctx.i("x", 0), ctx.i("y", 0), ctx.i("z", 0));
+            BlockPos pos = new BlockPos(ctx.requireInt("x"), ctx.requireInt("y"), ctx.requireInt("z"));
             boolean nbt = ctx.bool("nbt", false);
             return ctx.onMain(() -> {
                 MinecraftClient mc = MinecraftClient.getInstance();
-                if (mc.interactionManager == null) throw new IllegalStateException("not in world");
+                if (mc.interactionManager == null) throw ApiException.notInWorld();
                 mc.interactionManager.pickItemFromBlock(pos, nbt);
                 JsonObject o = new JsonObject();
                 o.addProperty("picked", true);
@@ -255,7 +257,7 @@ public final class ActionCommands {
 
         d.register("respawn", "respawn after death", ctx -> ctx.onMain(() -> {
             MinecraftClient mc = MinecraftClient.getInstance();
-            if (mc.player == null) throw new IllegalStateException("no player");
+            if (mc.player == null) throw ApiException.notInWorld();
             mc.player.requestRespawn();
             JsonObject o = new JsonObject();
             o.addProperty("respawned", true);

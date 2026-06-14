@@ -21,7 +21,7 @@ public final class CommandDispatcher {
     public JsonElement dispatch(String name, CommandContext ctx) throws Exception {
         Command c = commands.get(name);
         if (c == null) {
-            throw new IllegalArgumentException("unknown command: '" + name + "' (try 'help')");
+            throw new ApiException(ErrorCode.UNKNOWN_COMMAND, "unknown command: '" + name + "' (try 'help')");
         }
         return c.run(ctx);
     }

@@ -1,0 +1,1019 @@
+{
+  "protocol": 1,
+  "server": "MezzoSopranoClef",
+  "auth": {
+    "requiredWhen": "control.authToken is set (welcome.requiresAuth = true)",
+    "handshake": "{\"cmd\":\"hello\",\"args\":{\"token\":\"...\"}}"
+  },
+  "envelope": {
+    "request": "{id?, cmd, args?}",
+    "response": "{id?, ok:true, result} | {id?, ok:false, code, error}",
+    "event": "{event, data}"
+  },
+  "commands": [
+    {
+      "name": "ping",
+      "summary": "liveness check",
+      "args": [],
+      "result": "{pong,time}"
+    },
+    {
+      "name": "help",
+      "summary": "list all commands",
+      "args": [],
+      "result": "{<command>:<summary>,...}"
+    },
+    {
+      "name": "schema",
+      "summary": "machine-readable API contract: commands+args, events+fields, error codes, protocol version",
+      "args": [],
+      "result": "{protocol,server,auth,envelope,commands,events,errors}"
+    },
+    {
+      "name": "stats",
+      "summary": "runtime perf counters: process CPU time, suppressed sound work, skipped frames",
+      "args": [],
+      "result": "{uptimeMs,cpuMs?,soundsSuppressed,skippedFrames,disableSound,noGl,muteAudio}"
+    },
+    {
+      "name": "optimize",
+      "summary": "toggle the muted-sound short-circuit at runtime {sound?}",
+      "args": [
+        {
+          "name": "sound",
+          "type": "bool",
+          "required": false
+        }
+      ],
+      "result": "{disableSound}"
+    },
+    {
+      "name": "subscribe",
+      "summary": "stream events to this connection {events:[...] or omit for all}",
+      "args": [
+        {
+          "name": "events",
+          "type": "string[]",
+          "required": false
+        }
+      ],
+      "result": "{subscribed:[...]}"
+    },
+    {
+      "name": "unsubscribe",
+      "summary": "stop streaming events to this connection",
+      "args": [],
+      "result": "{unsubscribed}"
+    },
+    {
+      "name": "events",
+      "summary": "list every event type you can subscribe to",
+      "args": [],
+      "result": "{events:{<name>:<desc>},subscribeAll}"
+    },
+    {
+      "name": "status",
+      "summary": "bot, world and player status",
+      "args": [],
+      "result": "{headless,noGl,noWindow,inWorld,player?{...},server?,nav*,screenshotBackend,...}"
+    },
+    {
+      "name": "auth.status",
+      "summary": "current logged-in identity",
+      "args": [],
+      "result": "{username,uuid,type}"
+    },
+    {
+      "name": "connect",
+      "summary": "join a server {host, port}",
+      "args": [
+        {
+          "name": "host",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "port",
+          "type": "int",
+          "required": false,
+          "default": "25565"
+        }
+      ],
+      "result": "{connecting,host,port}"
+    },
+    {
+      "name": "disconnect",
+      "summary": "leave the current world",
+      "args": [],
+      "result": "{disconnected}"
+    },
+    {
+      "name": "chat",
+      "summary": "send chat, or a /command if prefixed with '/' {message}",
+      "args": [
+        {
+          "name": "message",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "result": "{sent}"
+    },
+    {
+      "name": "look",
+      "summary": "set view direction {yaw, pitch}",
+      "args": [
+        {
+          "name": "yaw",
+          "type": "float",
+          "required": false
+        },
+        {
+          "name": "pitch",
+          "type": "float",
+          "required": false
+        }
+      ],
+      "result": "{yaw,pitch}"
+    },
+    {
+      "name": "players",
+      "summary": "list tab-list players",
+      "args": [],
+      "result": "[{name,id,ping}]"
+    },
+    {
+      "name": "headless",
+      "summary": "toggle render-skip {enabled?}",
+      "args": [
+        {
+          "name": "enabled",
+          "type": "bool",
+          "required": false
+        }
+      ],
+      "result": "{headless}"
+    },
+    {
+      "name": "screenshot",
+      "summary": "render a PNG at any {x,y,z,yaw,pitch,width,height,fov} -> base64 (defaults: player view)",
+      "args": [
+        {
+          "name": "x",
+          "type": "double",
+          "required": false
+        },
+        {
+          "name": "y",
+          "type": "double",
+          "required": false
+        },
+        {
+          "name": "z",
+          "type": "double",
+          "required": false
+        },
+        {
+          "name": "yaw",
+          "type": "float",
+          "required": false
+        },
+        {
+          "name": "pitch",
+          "type": "float",
+          "required": false
+        },
+        {
+          "name": "width",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "height",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "fov",
+          "type": "float",
+          "required": false
+        }
+      ],
+      "result": "{format,backend,bytes,base64}"
+    },
+    {
+      "name": "goto",
+      "summary": "Baritone path to {x,y,z} or {x,z}",
+      "args": [
+        {
+          "name": "x",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "z",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "y",
+          "type": "int",
+          "required": false
+        }
+      ],
+      "result": "{pathing,backend}"
+    },
+    {
+      "name": "baritone",
+      "summary": "run any Baritone command (full feature set, if Baritone is installed) {command}",
+      "args": [
+        {
+          "name": "command",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "result": "{ran,backend}"
+    },
+    {
+      "name": "nav.stop",
+      "summary": "cancel Baritone pathing",
+      "args": [],
+      "result": "{stopped}"
+    },
+    {
+      "name": "nav.status",
+      "summary": "pathfinding availability + state",
+      "args": [],
+      "result": "{available,backend,active}"
+    },
+    {
+      "name": "move",
+      "summary": "walk control {forward,backward,left,right,jump,sprint,sneak,durationMs?}",
+      "args": [
+        {
+          "name": "forward",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "backward",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "left",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "right",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "jump",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "sneak",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "sprint",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "durationMs",
+          "type": "int",
+          "required": false
+        }
+      ],
+      "result": "{moving}"
+    },
+    {
+      "name": "stopMove",
+      "summary": "stop all movement input",
+      "args": [],
+      "result": "{stopped}"
+    },
+    {
+      "name": "mine",
+      "summary": "start breaking a block over time {x,y,z,face?}",
+      "args": [
+        {
+          "name": "x",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "y",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "z",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "face",
+          "type": "string",
+          "required": false,
+          "default": "up"
+        }
+      ],
+      "result": "{mining}"
+    },
+    {
+      "name": "stopMine",
+      "summary": "stop breaking",
+      "args": [],
+      "result": "{stopped}"
+    },
+    {
+      "name": "breakBlock",
+      "summary": "instantly break a block (creative) {x,y,z}",
+      "args": [
+        {
+          "name": "x",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "y",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "z",
+          "type": "int",
+          "required": true
+        }
+      ],
+      "result": "{broken}"
+    },
+    {
+      "name": "place",
+      "summary": "right-click/place against a block face {x,y,z,face?}",
+      "args": [
+        {
+          "name": "x",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "y",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "z",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "face",
+          "type": "string",
+          "required": false,
+          "default": "up"
+        }
+      ],
+      "result": "{placed}"
+    },
+    {
+      "name": "use",
+      "summary": "use held item / right-click air {hand?}",
+      "args": [
+        {
+          "name": "hand",
+          "type": "string",
+          "required": false,
+          "default": "main"
+        }
+      ],
+      "result": "{used}"
+    },
+    {
+      "name": "attack",
+      "summary": "attack {entityId?} or the nearest entity within reach",
+      "args": [
+        {
+          "name": "entityId",
+          "type": "int",
+          "required": false
+        }
+      ],
+      "result": "{attacked,type}"
+    },
+    {
+      "name": "setSlot",
+      "summary": "select hotbar slot {slot 0-8}",
+      "args": [
+        {
+          "name": "slot",
+          "type": "int",
+          "required": true
+        }
+      ],
+      "result": "{slot}"
+    },
+    {
+      "name": "dropItem",
+      "summary": "drop the held item {all?}",
+      "args": [
+        {
+          "name": "all",
+          "type": "bool",
+          "required": false
+        }
+      ],
+      "result": "{dropped}"
+    },
+    {
+      "name": "inventory",
+      "summary": "list inventory contents",
+      "args": [],
+      "result": "{selectedSlot,items:[{slot,item,name,count}]}"
+    },
+    {
+      "name": "entities",
+      "summary": "list nearby entities {radius?=16}",
+      "args": [
+        {
+          "name": "radius",
+          "type": "double",
+          "required": false,
+          "default": "16"
+        }
+      ],
+      "result": "[{id,type,name,x,y,z,distance}]"
+    },
+    {
+      "name": "blockAt",
+      "summary": "block id at {x,y,z}",
+      "args": [
+        {
+          "name": "x",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "y",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "z",
+          "type": "int",
+          "required": true
+        }
+      ],
+      "result": "{block,air}"
+    },
+    {
+      "name": "interactEntity",
+      "summary": "right-click an entity — mount/trade/breed/leash {entityId, hand?}",
+      "args": [
+        {
+          "name": "entityId",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "hand",
+          "type": "string",
+          "required": false,
+          "default": "main"
+        }
+      ],
+      "result": "{interacted,type,result}"
+    },
+    {
+      "name": "swapHands",
+      "summary": "swap main-hand and off-hand items",
+      "args": [],
+      "result": "{swapped}"
+    },
+    {
+      "name": "pickBlock",
+      "summary": "pick the block at {x,y,z} into the hotbar (like middle-click)",
+      "args": [
+        {
+          "name": "x",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "y",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "z",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "nbt",
+          "type": "bool",
+          "required": false
+        }
+      ],
+      "result": "{picked}"
+    },
+    {
+      "name": "useHold",
+      "summary": "hold right-click for N ticks — charge bow/crossbow, block, fish {ticks?=40}",
+      "args": [
+        {
+          "name": "ticks",
+          "type": "int",
+          "required": false,
+          "default": "40"
+        }
+      ],
+      "result": "{holding}"
+    },
+    {
+      "name": "useRelease",
+      "summary": "release a held use (fire a charged bow / stop)",
+      "args": [],
+      "result": "{released}"
+    },
+    {
+      "name": "eat",
+      "summary": "eat/drink the currently held item {ticks?=40}",
+      "args": [
+        {
+          "name": "ticks",
+          "type": "int",
+          "required": false,
+          "default": "40"
+        }
+      ],
+      "result": "{eating}"
+    },
+    {
+      "name": "respawn",
+      "summary": "respawn after death",
+      "args": [],
+      "result": "{respawned}"
+    },
+    {
+      "name": "container",
+      "summary": "read the open container: slots, cursor, and villager trades",
+      "args": [],
+      "result": "{handler,syncId,screen,slots,cursor,trades?}"
+    },
+    {
+      "name": "clickSlot",
+      "summary": "click a container slot {slot, button?=0, mode?=pickup|quickMove|swap|clone|throw|pickupAll}",
+      "args": [
+        {
+          "name": "slot",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "button",
+          "type": "int",
+          "required": false,
+          "default": "0"
+        },
+        {
+          "name": "mode",
+          "type": "string",
+          "required": false,
+          "default": "pickup"
+        }
+      ],
+      "result": "{clicked,mode,cursor}"
+    },
+    {
+      "name": "closeScreen",
+      "summary": "close the open container/screen",
+      "args": [],
+      "result": "{closed}"
+    },
+    {
+      "name": "selectTrade",
+      "summary": "select a villager trade by index (open the villager first) {index}",
+      "args": [
+        {
+          "name": "index",
+          "type": "int",
+          "required": true
+        }
+      ],
+      "result": "{selected}"
+    },
+    {
+      "name": "screen",
+      "summary": "list clickable widgets on the current screen (for modded button/field GUIs)",
+      "args": [],
+      "result": "{screen,widgets:[{index,type,text,x,y,active,visible}]}"
+    },
+    {
+      "name": "clickButton",
+      "summary": "click a screen widget by its index (from `screen`) {index}",
+      "args": [
+        {
+          "name": "index",
+          "type": "int",
+          "required": true
+        }
+      ],
+      "result": "{clicked,text}"
+    },
+    {
+      "name": "setText",
+      "summary": "type into a text-field widget {index, text}",
+      "args": [
+        {
+          "name": "index",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "text",
+          "type": "string",
+          "required": false,
+          "default": ""
+        }
+      ],
+      "result": "{set}"
+    },
+    {
+      "name": "serverui",
+      "summary": "read server-side UI: title/subtitle/action-bar, boss bars, scoreboard sidebar",
+      "args": [],
+      "result": "{title,bossBars,scoreboards,sidebar}"
+    },
+    {
+      "name": "findItem",
+      "summary": "find inventory slots holding an item {item}",
+      "args": [
+        {
+          "name": "item",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "result": "{total,slots:[{slot,count}]}"
+    },
+    {
+      "name": "equip",
+      "summary": "shift-click an item from inventory (armor/shield auto-equips) {item}",
+      "args": [
+        {
+          "name": "item",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "result": "{equipped,fromSlot}"
+    },
+    {
+      "name": "deposit",
+      "summary": "shift-click matching items from inventory INTO the open container {item}",
+      "args": [
+        {
+          "name": "item",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "result": "{deposited}"
+    },
+    {
+      "name": "withdraw",
+      "summary": "shift-click matching items from the open container INTO inventory {item}",
+      "args": [
+        {
+          "name": "item",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "result": "{withdrew}"
+    },
+    {
+      "name": "dropStack",
+      "summary": "throw whole stacks of an item {item}",
+      "args": [
+        {
+          "name": "item",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "result": "{dropped}"
+    }
+  ],
+  "events": [
+    {
+      "name": "welcome",
+      "description": "sent once on connect, before auth",
+      "fields": [
+        {
+          "name": "server",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "protocol",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "requiresAuth",
+          "type": "bool",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "chat",
+      "description": "a chat or system message was received",
+      "fields": [
+        {
+          "name": "text",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "sender",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "kind",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "health",
+      "description": "health or hunger changed",
+      "fields": [
+        {
+          "name": "health",
+          "type": "float",
+          "required": true
+        },
+        {
+          "name": "food",
+          "type": "int",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "damage",
+      "description": "the bot took damage",
+      "fields": [
+        {
+          "name": "amount",
+          "type": "float",
+          "required": true
+        },
+        {
+          "name": "health",
+          "type": "float",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "death",
+      "description": "the bot died",
+      "fields": []
+    },
+    {
+      "name": "respawn",
+      "description": "the bot respawned",
+      "fields": []
+    },
+    {
+      "name": "join",
+      "description": "a player entered the tab list",
+      "fields": [
+        {
+          "name": "name",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "leave",
+      "description": "a player left the tab list",
+      "fields": [
+        {
+          "name": "name",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "connected",
+      "description": "the bot connected to a server",
+      "fields": []
+    },
+    {
+      "name": "disconnected",
+      "description": "the bot left a server",
+      "fields": []
+    },
+    {
+      "name": "tick",
+      "description": "throttled state snapshot (~1/s)",
+      "fields": [
+        {
+          "name": "x",
+          "type": "double",
+          "required": true
+        },
+        {
+          "name": "y",
+          "type": "double",
+          "required": true
+        },
+        {
+          "name": "z",
+          "type": "double",
+          "required": true
+        },
+        {
+          "name": "yaw",
+          "type": "float",
+          "required": true
+        },
+        {
+          "name": "pitch",
+          "type": "float",
+          "required": true
+        },
+        {
+          "name": "health",
+          "type": "float",
+          "required": true
+        },
+        {
+          "name": "food",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "dimension",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "screenOpen",
+      "description": "a container/screen opened",
+      "fields": [
+        {
+          "name": "screen",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "screenClose",
+      "description": "the open screen closed",
+      "fields": [
+        {
+          "name": "screen",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "entitySpawn",
+      "description": "an entity appeared nearby (within 24 blocks)",
+      "fields": [
+        {
+          "name": "id",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "type",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "x",
+          "type": "double",
+          "required": true
+        },
+        {
+          "name": "y",
+          "type": "double",
+          "required": true
+        },
+        {
+          "name": "z",
+          "type": "double",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "entityRemove",
+      "description": "a nearby entity left",
+      "fields": [
+        {
+          "name": "id",
+          "type": "int",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "auth.prompt",
+      "description": "device-code login: show this to the user (always delivered)",
+      "fields": [
+        {
+          "name": "verificationUri",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "userCode",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "auth.ok",
+      "description": "login succeeded (always delivered)",
+      "fields": []
+    },
+    {
+      "name": "auth.error",
+      "description": "login failed (always delivered)",
+      "fields": [
+        {
+          "name": "error",
+          "type": "string",
+          "required": false
+        }
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": "INVALID_JSON",
+      "meaning": "the request was not valid JSON"
+    },
+    {
+      "code": "MISSING_CMD",
+      "meaning": "the request had no 'cmd' field"
+    },
+    {
+      "code": "UNKNOWN_COMMAND",
+      "meaning": "no command with that name (see 'help' / 'schema')"
+    },
+    {
+      "code": "UNAUTHORIZED",
+      "meaning": "auth required — send {cmd:'hello',args:{token}} first"
+    },
+    {
+      "code": "BAD_TOKEN",
+      "meaning": "the auth token did not match"
+    },
+    {
+      "code": "BAD_ARGS",
+      "meaning": "an argument was missing or had the wrong type"
+    },
+    {
+      "code": "NOT_IN_WORLD",
+      "meaning": "the bot is not in a world (not spawned / on the title screen)"
+    },
+    {
+      "code": "NOT_CONNECTED",
+      "meaning": "the bot is not connected to a server"
+    },
+    {
+      "code": "NOT_FOUND",
+      "meaning": "the requested target was not found"
+    },
+    {
+      "code": "COMMAND_FAILED",
+      "meaning": "the command failed with an unexpected error"
+    }
+  ]
+}

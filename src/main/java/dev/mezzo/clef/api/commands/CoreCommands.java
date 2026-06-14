@@ -2,6 +2,8 @@ package dev.mezzo.clef.api.commands;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import dev.mezzo.clef.api.ApiException;
+import dev.mezzo.clef.api.ApiSchema;
 import dev.mezzo.clef.api.CommandDispatcher;
 import dev.mezzo.clef.bot.ServerConnector;
 import dev.mezzo.clef.headless.HeadlessController;
@@ -31,6 +33,10 @@ public final class CoreCommands {
             ctx.server.dispatcher().help().forEach(o::addProperty);
             return o;
         });
+
+        d.register("schema",
+                "machine-readable API contract: commands+args, events+fields, error codes, protocol version",
+                ctx -> ApiSchema.toJson(ctx.server.dispatcher().help()));
 
         d.register("stats", "runtime perf counters: process CPU time, suppressed sound work, skipped frames", ctx -> {
             HeadlessController hc = HeadlessController.get();
@@ -77,24 +83,9 @@ public final class CoreCommands {
         });
 
         d.register("events", "list every event type you can subscribe to", ctx -> {
-            JsonObject o = new JsonObject();
-            o.addProperty("chat", "a chat or system message was received {text, sender?, kind}");
-            o.addProperty("health", "health or hunger changed {health, food}");
-            o.addProperty("damage", "the bot took damage {amount, health}");
-            o.addProperty("death", "the bot died");
-            o.addProperty("respawn", "the bot respawned");
-            o.addProperty("join", "a player entered the tab list {name}");
-            o.addProperty("leave", "a player left the tab list {name}");
-            o.addProperty("connected", "the bot connected to a server");
-            o.addProperty("disconnected", "the bot left a server");
-            o.addProperty("tick", "throttled state snapshot ~1/s {x,y,z,yaw,pitch,health,food,dimension}");
-            o.addProperty("screenOpen", "a container/screen opened {screen}");
-            o.addProperty("screenClose", "the open screen closed {screen}");
-            o.addProperty("entitySpawn", "an entity appeared nearby {id,type,x,y,z}");
-            o.addProperty("entityRemove", "a nearby entity left {id}");
-            o.addProperty("auth.prompt|auth.ok|auth.error", "auth lifecycle (always delivered)");
+            // Sourced from ApiSchema (single source of truth); `schema` returns the field shapes too.
             JsonObject o2 = new JsonObject();
-            o2.add("events", o);
+            o2.add("events", ApiSchema.eventDescriptions());
             o2.addProperty("subscribeAll", "subscribe with no args (or events:['*']) for everything");
             return o2;
         });
@@ -174,7 +165,7 @@ public final class CoreCommands {
             String msg = ctx.requireStr("message");
             return ctx.onMain(() -> {
                 MinecraftClient mc = MinecraftClient.getInstance();
-                if (mc.getNetworkHandler() == null) throw new IllegalStateException("not connected");
+                if (mc.getNetworkHandler() == null) throw ApiException.notConnected();
                 if (msg.startsWith("/")) mc.getNetworkHandler().sendChatCommand(msg.substring(1));
                 else mc.getNetworkHandler().sendChatMessage(msg);
                 JsonObject o = new JsonObject();
@@ -188,7 +179,7 @@ public final class CoreCommands {
             float pitch = ctx.has("pitch") ? ctx.f("pitch", 0) : Float.NaN;
             return ctx.onMain(() -> {
                 MinecraftClient mc = MinecraftClient.getInstance();
-                if (mc.player == null) throw new IllegalStateException("not in world");
+                if (mc.player == null) throw ApiException.notInWorld();
                 if (!Float.isNaN(yaw)) {
                     mc.player.setYaw(yaw);
                     mc.player.setHeadYaw(yaw);
@@ -249,8 +240,8 @@ public final class CoreCommands {
 
         d.register("goto", "Baritone path to {x,y,z} or {x,z}", ctx -> {
             Navigator nav = ctx.server.services.navigator;
-            int x = ctx.i("x", 0);
-            int z = ctx.i("z", 0);
+            int x = ctx.requireInt("x");
+            int z = ctx.requireInt("z");
             boolean hasY = ctx.has("y");
             int y = ctx.i("y", 0);
             ctx.server.services.input.clear(); // hand movement to Baritone; stop fighting it

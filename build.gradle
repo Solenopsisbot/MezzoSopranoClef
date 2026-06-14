@@ -100,6 +100,11 @@ dependencies {
 test {
     useJUnitPlatform()
     testLogging { events "passed", "skipped", "failed" }
+    // Forward the schema-export flag into the forked test JVM, so
+    // `./gradlew test -Dclef.schema.write=true` regenerates clients/schema.json from ApiSchema.
+    if (System.getProperty('clef.schema.write') != null) {
+        systemProperty 'clef.schema.write', System.getProperty('clef.schema.write')
+    }
 }
 
 java {

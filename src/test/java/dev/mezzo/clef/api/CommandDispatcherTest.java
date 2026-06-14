@@ -19,10 +19,10 @@ class CommandDispatcherTest {
     }
 
     @Test
-    void unknownCommandThrows() {
+    void unknownCommandThrowsCodedException() {
         CommandDispatcher d = new CommandDispatcher();
-        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
-                () -> d.dispatch("nope", null));
+        ApiException ex = assertThrows(ApiException.class, () -> d.dispatch("nope", null));
+        assertEquals(ErrorCode.UNKNOWN_COMMAND, ex.code);
         assertTrue(ex.getMessage().contains("nope"));
     }
 }

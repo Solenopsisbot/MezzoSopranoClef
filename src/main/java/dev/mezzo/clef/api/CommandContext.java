@@ -59,9 +59,38 @@ public final class CommandContext {
     }
 
     public String requireStr(String key) {
-        if (!args.has(key) || args.get(key).isJsonNull())
-            throw new IllegalArgumentException("missing required arg: " + key);
+        if (!has(key)) throw ApiException.badArgs("missing required arg: " + key);
         return args.get(key).getAsString();
+    }
+
+    /** Required integer arg. Throws {@link ApiException} ({@code BAD_ARGS}) if missing or non-numeric. */
+    public int requireInt(String key) {
+        if (!has(key)) throw ApiException.badArgs("missing required arg: " + key);
+        try {
+            return args.get(key).getAsInt();
+        } catch (RuntimeException e) {
+            throw ApiException.badArgs("arg '" + key + "' must be an integer");
+        }
+    }
+
+    /** Required double arg. Throws {@link ApiException} ({@code BAD_ARGS}) if missing or non-numeric. */
+    public double requireDouble(String key) {
+        if (!has(key)) throw ApiException.badArgs("missing required arg: " + key);
+        try {
+            return args.get(key).getAsDouble();
+        } catch (RuntimeException e) {
+            throw ApiException.badArgs("arg '" + key + "' must be a number");
+        }
+    }
+
+    /** Required float arg. Throws {@link ApiException} ({@code BAD_ARGS}) if missing or non-numeric. */
+    public float requireFloat(String key) {
+        if (!has(key)) throw ApiException.badArgs("missing required arg: " + key);
+        try {
+            return args.get(key).getAsFloat();
+        } catch (RuntimeException e) {
+            throw ApiException.badArgs("arg '" + key + "' must be a number");
+        }
     }
 
     public int i(String key, int def) {

@@ -2,6 +2,7 @@ package dev.mezzo.clef.api.commands;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import dev.mezzo.clef.api.ApiException;
 import dev.mezzo.clef.api.CommandDispatcher;
 import dev.mezzo.clef.mixin.client.BossBarHudAccessor;
 import dev.mezzo.clef.mixin.client.InGameHudAccessor;
@@ -36,7 +37,7 @@ public final class UiCommands {
 
         d.register("container", "read the open container: slots, cursor, and villager trades", ctx -> ctx.onMain(() -> {
             MinecraftClient mc = MinecraftClient.getInstance();
-            if (mc.player == null) throw new IllegalStateException("not in world");
+            if (mc.player == null) throw ApiException.notInWorld();
             ScreenHandler h = mc.player.currentScreenHandler;
             JsonObject o = new JsonObject();
             o.addProperty("handler", h.getClass().getSimpleName());
@@ -74,12 +75,12 @@ public final class UiCommands {
 
         d.register("clickSlot", "click a container slot {slot, button?=0, mode?=pickup|quickMove|swap|clone|throw|pickupAll}",
                 ctx -> {
-                    int slot = ctx.i("slot", 0);
+                    int slot = ctx.requireInt("slot");
                     int button = ctx.i("button", 0);
                     SlotActionType mode = slotAction(ctx.str("mode", "pickup"));
                     return ctx.onMain(() -> {
                         MinecraftClient mc = MinecraftClient.getInstance();
-                        if (mc.player == null || mc.interactionManager == null) throw new IllegalStateException("not in world");
+                        if (mc.player == null || mc.interactionManager == null) throw ApiException.notInWorld();
                         ScreenHandler h = mc.player.currentScreenHandler;
                         mc.interactionManager.clickSlot(h.syncId, slot, button, mode, mc.player);
                         JsonObject o = new JsonObject();
@@ -99,10 +100,10 @@ public final class UiCommands {
         }));
 
         d.register("selectTrade", "select a villager trade by index (open the villager first) {index}", ctx -> {
-            int index = ctx.i("index", 0);
+            int index = ctx.requireInt("index");
             return ctx.onMain(() -> {
                 MinecraftClient mc = MinecraftClient.getInstance();
-                if (mc.player == null || mc.getNetworkHandler() == null) throw new IllegalStateException("not in world");
+                if (mc.player == null || mc.getNetworkHandler() == null) throw ApiException.notInWorld();
                 if (!(mc.player.currentScreenHandler instanceof MerchantScreenHandler m)) {
                     throw new IllegalStateException("no villager trade screen open");
                 }
@@ -142,7 +143,7 @@ public final class UiCommands {
         }));
 
         d.register("clickButton", "click a screen widget by its index (from `screen`) {index}", ctx -> {
-            int index = ctx.i("index", 0);
+            int index = ctx.requireInt("index");
             return ctx.onMain(() -> {
                 MinecraftClient mc = MinecraftClient.getInstance();
                 Screen sc = mc.currentScreen;
@@ -158,7 +159,7 @@ public final class UiCommands {
         });
 
         d.register("setText", "type into a text-field widget {index, text}", ctx -> {
-            int index = ctx.i("index", 0);
+            int index = ctx.requireInt("index");
             String text = ctx.str("text", "");
             return ctx.onMain(() -> {
                 MinecraftClient mc = MinecraftClient.getInstance();
@@ -218,7 +219,7 @@ public final class UiCommands {
             String q = ctx.requireStr("item");
             return ctx.onMain(() -> {
                 MinecraftClient mc = MinecraftClient.getInstance();
-                if (mc.player == null) throw new IllegalStateException("not in world");
+                if (mc.player == null) throw ApiException.notInWorld();
                 var inv = mc.player.getInventory();
                 JsonArray found = new JsonArray();
                 int total = 0;
@@ -242,7 +243,7 @@ public final class UiCommands {
             String q = ctx.requireStr("item");
             return ctx.onMain(() -> {
                 MinecraftClient mc = MinecraftClient.getInstance();
-                if (mc.player == null || mc.interactionManager == null) throw new IllegalStateException("not in world");
+                if (mc.player == null || mc.interactionManager == null) throw ApiException.notInWorld();
                 ScreenHandler h = mc.player.currentScreenHandler;
                 Object playerInv = mc.player.getInventory();
                 for (Slot s : h.slots) {
@@ -254,7 +255,7 @@ public final class UiCommands {
                         return o;
                     }
                 }
-                throw new IllegalStateException("no '" + q + "' in inventory");
+                throw ApiException.notFound("no '" + q + "' in inventory");
             });
         });
 
@@ -272,7 +273,7 @@ public final class UiCommands {
             String q = ctx.requireStr("item");
             return ctx.onMain(() -> {
                 MinecraftClient mc = MinecraftClient.getInstance();
-                if (mc.player == null || mc.interactionManager == null) throw new IllegalStateException("not in world");
+                if (mc.player == null || mc.interactionManager == null) throw ApiException.notInWorld();
                 ScreenHandler h = mc.player.currentScreenHandler;
                 int dropped = 0;
                 for (Slot s : h.slots) {
@@ -291,7 +292,7 @@ public final class UiCommands {
     /** shift-clicks (QUICK_MOVE) matching items between the player inventory and the open container. */
     private static JsonObject transfer(String q, boolean intoContainer) {
         MinecraftClient mc = MinecraftClient.getInstance();
-        if (mc.player == null || mc.interactionManager == null) throw new IllegalStateException("not in world");
+        if (mc.player == null || mc.interactionManager == null) throw ApiException.notInWorld();
         ScreenHandler h = mc.player.currentScreenHandler;
         Object playerInv = mc.player.getInventory();
         int moved = 0;

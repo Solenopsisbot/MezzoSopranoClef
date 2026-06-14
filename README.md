@@ -79,10 +79,12 @@ calls were verified against the actual mapped game — not guessed.
 resolve, auth module, WebSocket control plane, command layer, Baritone reflective bridge,
 session injection, server connect/disconnect, chat/look/players/status.
 
-**Verified by the test suite (`./gradlew test`, 63 tests, all green):** the RFC 6455 WebSocket
+**Verified by the test suite (`./gradlew test`, 73 tests, all green):** the RFC 6455 WebSocket
 codec (handshake, masking, fragmentation, ping/pong, close, oversized-frame rejection); the full
 control-plane wire over a real socket (dispatch, `ping`/`help`/error, **event subscription
-filtering** with two clients) via an in-process `ControlServer`; the **complete Microsoft auth
+filtering** with two clients) via an in-process `ControlServer`; the **machine-readable API schema**
+(a drift-guard test fails the build if `schema` and the registered command set ever disagree) and
+**required-argument validation** (missing coords/ids return `BAD_ARGS`, not a silent `0`); the **complete Microsoft auth
 flow against a local mock HTTP server** (device-code polling, `authorization_pending`, refresh,
 errors); offline UUID derivation; config load/override; the CPU raycaster (orientation, ground/
 sky, entity hits, occlusion, dimensions); movement-vector + snapshot-bounds math; and PNG
@@ -401,10 +403,14 @@ offline-mode servers immediately.
 Connect to `ws://<host>:<port>` (default `127.0.0.1:8731`).
 
 ```jsonc
+// on connect (before auth) the server sends:
+{ "event": "welcome", "data": { "server": "MezzoSopranoClef", "protocol": 1, "requiresAuth": true } }
 // request
 { "id": "1", "cmd": "status", "args": {} }
-// response
-{ "id": "1", "ok": true, "result": { ... } }   // or { "ok": false, "error": "..." }
+// success response
+{ "id": "1", "ok": true, "result": { ... } }
+// error response — branch on the stable `code`; `error` is a human-readable detail
+{ "id": "1", "ok": false, "code": "NOT_IN_WORLD", "error": "not in world" }
 // unsolicited events
 { "event": "auth.prompt", "data": { "verificationUri": "...", "userCode": "..." } }
 ```
@@ -414,12 +420,61 @@ New configs generate `control.authToken` automatically. Send
 Python probes. Browser WebSocket origins are rejected unless they come from the built-in dashboard
 or from `control.allowedOrigins`.
 
+### Self-describing contract (`schema`) + versioning
+
+The control plane is designed to be driven by other programs without scraping this README. Two
+pieces make integration automatable:
+
+- **`protocol` version** — the `welcome` event (and the `hello` reply) carry an integer protocol
+  version (`ApiSchema.PROTOCOL_VERSION`). It bumps on any breaking wire change, so a client can
+  negotiate or fail fast.
+- **`schema` command** — returns the entire contract as machine-readable JSON: every command with
+  its typed argument spec (name / type / required / default), every event with its payload fields,
+  the full error-code catalog, and the envelope shapes. Generate a typed client or validate
+  requests straight off this instead of hard-coding.
+
+```jsonc
+{ "id": "1", "cmd": "schema" }
+// -> { "protocol": 1, "server": "...", "auth": {...}, "envelope": {...},
+//      "commands": [ { "name": "mine", "summary": "...",
+//                      "args": [ {"name":"x","type":"int","required":true}, ... ],
+//                      "result": "{mining}" }, ... ],
+//      "events":   [ { "name":"chat", "fields":[{"name":"text","type":"string","required":true}, ...] } ],
+//      "errors":   [ { "code":"NOT_IN_WORLD", "meaning":"..." }, ... ] }
+```
+
+A build-time test asserts the `schema` command set always matches the commands the bot actually
+registers, so the published contract can't drift from reality.
+
+### Error codes
+
+Every error response carries a stable, machine-readable `code` (plus a human `error` string). Branch
+on the `code`; the `error` wording may change between versions. The full list is in the `schema`
+response's `errors` array:
+
+| Code | Meaning |
+|---|---|
+| `INVALID_JSON` | the request was not valid JSON |
+| `MISSING_CMD` | the request had no `cmd` field |
+| `UNKNOWN_COMMAND` | no command with that name (see `help` / `schema`) |
+| `UNAUTHORIZED` | auth required — send `hello` first |
+| `BAD_TOKEN` | the auth token did not match |
+| `BAD_ARGS` | a required argument was missing or had the wrong type |
+| `NOT_IN_WORLD` | the bot is not in a world yet (title screen / not spawned) |
+| `NOT_CONNECTED` | the bot is not connected to a server |
+| `NOT_FOUND` | a named target (entity / item / slot / widget) was not found |
+| `COMMAND_FAILED` | catch-all for an otherwise-uncoded failure |
+
+Required arguments are validated: a command listed below with non-`?` args (e.g. `mine` needs
+`x,y,z`) now returns `BAD_ARGS` if they're missing, instead of silently defaulting to `0`.
+
 ### Commands
 
 | Command        | Args                                              | Does |
 |----------------|---------------------------------------------------|------|
 | `ping`         | —                                                 | liveness |
 | `help`         | —                                                 | list all commands |
+| `schema`       | —                                                 | machine-readable contract (commands+args, events, error codes, protocol) |
 | `status`       | —                                                 | headless/world/player state |
 | `auth.status`  | —                                                 | current identity |
 | `connect`      | `host`, `port?`                                   | join a server |

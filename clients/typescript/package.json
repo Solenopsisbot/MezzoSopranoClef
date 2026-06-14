@@ -1,0 +1,12 @@
+{
+  "name": "mezzosopranoclef-client",
+  "version": "0.1.0",
+  "description": "Typed TypeScript/JavaScript client for the MezzoSopranoClef control plane (browser + Node >= 22).",
+  "type": "module",
+  "license": "MIT",
+  "main": "clef.ts",
+  "types": "clef.ts",
+  "files": ["clef.ts"],
+  "keywords": ["minecraft", "bot", "websocket", "mezzosopranoclef"],
+  "dependencies": {}
+}

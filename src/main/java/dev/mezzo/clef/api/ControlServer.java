@@ -84,6 +84,7 @@ public final class ControlServer implements WsServer.Listener {
     public void onOpen(WsConnection conn) {
         JsonObject data = new JsonObject();
         data.addProperty("server", "MezzoSopranoClef");
+        data.addProperty("protocol", ApiSchema.PROTOCOL_VERSION);
         data.addProperty("requiresAuth", requireAuth);
         sendEvent(conn, "welcome", data);
     }
@@ -94,7 +95,7 @@ public final class ControlServer implements WsServer.Listener {
         try {
             req = JsonParser.parseString(message).getAsJsonObject();
         } catch (Exception e) {
-            sendError(conn, null, "invalid JSON request");
+            sendError(conn, null, ErrorCode.INVALID_JSON, "invalid JSON request");
             return;
         }
 
@@ -104,7 +105,7 @@ public final class ControlServer implements WsServer.Listener {
                 ? req.getAsJsonObject("args") : new JsonObject();
 
         if (cmd == null) {
-            sendError(conn, id, "missing 'cmd'");
+            sendError(conn, id, ErrorCode.MISSING_CMD, "missing 'cmd'");
             return;
         }
 
@@ -115,15 +116,16 @@ public final class ControlServer implements WsServer.Listener {
             if (ok) {
                 JsonObject r = new JsonObject();
                 r.addProperty("authed", true);
+                r.addProperty("protocol", ApiSchema.PROTOCOL_VERSION);
                 sendResult(conn, id, r);
             } else {
-                sendError(conn, id, "bad token");
+                sendError(conn, id, ErrorCode.BAD_TOKEN, "bad token");
             }
             return;
         }
 
         if (requireAuth && !Boolean.TRUE.equals(conn.attributes.get("authed"))) {
-            sendError(conn, id, "unauthorized — send {cmd:'hello',args:{token:'...'}} first");
+            sendError(conn, id, ErrorCode.UNAUTHORIZED, "unauthorized — send {cmd:'hello',args:{token:'...'}} first");
             return;
         }
 
@@ -133,7 +135,12 @@ public final class ControlServer implements WsServer.Listener {
             sendResult(conn, id, result == null ? JsonNull.INSTANCE : result);
         } catch (Exception e) {
             MezzoClef.LOG.debug("command '{}' failed", cmd, e);
-            sendError(conn, id, e.getMessage() == null ? e.toString() : e.getMessage());
+            // Recover a machine-readable code from anywhere in the cause chain (onMain re-wraps).
+            ApiException coded = ApiException.find(e);
+            ErrorCode code = coded != null ? coded.code : ErrorCode.COMMAND_FAILED;
+            String msg = coded != null ? coded.getMessage()
+                    : (e.getMessage() == null ? e.toString() : e.getMessage());
+            sendError(conn, id, code, msg);
         }
     }
 
@@ -201,10 +208,11 @@ public final class ControlServer implements WsServer.Listener {
         send(conn, o);
     }
 
-    private void sendError(WsConnection conn, String id, String error) {
+    private void sendError(WsConnection conn, String id, ErrorCode code, String error) {
         JsonObject o = new JsonObject();
         if (id != null) o.addProperty("id", id);
         o.addProperty("ok", false);
+        o.addProperty("code", code.name());
         o.addProperty("error", error);
         send(conn, o);
     }
