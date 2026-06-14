@@ -192,6 +192,13 @@ docker run --rm -it -p 8731:8731 -v clef-data:/data \
   -e CLEF_OPTS="-Dmezzoclef.ws.host=0.0.0.0" mezzosopranoclef
 ```
 
+Or skip the build and pull the published image (after the first tagged release):
+
+```bash
+docker run --rm -it -p 8731:8731 -v clef-data:/data \
+  -e CLEF_OPTS="-Dmezzoclef.ws.host=0.0.0.0" ghcr.io/solenopsisbot/mezzosopranoclef:latest
+```
+
 The final image is just a JRE + the launcher (no Minecraft baked in); MC downloads into the `/data`
 volume on first run. Bind the control plane to `0.0.0.0` (above) to reach it from the host — it
 stays token-protected (token generated into `/data/config/mezzoclef.json`). Mount `/data` to
@@ -293,6 +300,24 @@ Version stack (pinned in `gradle.properties`, verified against fabricmc.net 2026
 
 To deploy into an existing launcher (Prism/MultiMC/etc.), drop the built jar + Fabric API into
 `mods/`.
+
+### CI & releases
+
+CI runs on [Blacksmith](https://useblacksmith.com) runners (`.github/workflows`):
+
+- **`ci.yml`** — builds the mod + launcher and runs the 63 tests on every push/PR (the heavy
+  server e2e is manual via *workflow_dispatch*; no-GL means it needs no xvfb).
+- **`release.yml`** — on a `vX.Y.Z` tag: attaches the **mod jar + launcher jar** to a GitHub
+  Release and pushes the **Docker image to GHCR** (`ghcr.io/<owner>/<repo>`), built with
+  Blacksmith's Docker builder.
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0      # -> Release with jars + GHCR image
+```
+
+> Blacksmith runners require the Blacksmith GitHub App installed on the repo/org. Without it,
+> change `runs-on: blacksmith-4vcpu-ubuntu-2204` back to `ubuntu-latest` and swap
+> `useblacksmith/cache` → `actions/cache` and the `useblacksmith/*-docker-*` actions → `docker/*`.
 
 ---
 

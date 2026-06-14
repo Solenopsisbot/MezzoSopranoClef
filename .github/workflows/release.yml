@@ -1,0 +1,90 @@
+name: Release
+
+# Publish on a version tag, e.g.:  git tag v0.1.0 && git push origin v0.1.0
+#   * attaches the mod jar + standalone launcher jar to a GitHub Release
+#   * builds and pushes the Docker image to GHCR (ghcr.io/<owner>/<repo>)
+#
+# Runs on Blacksmith runners; the image build uses Blacksmith's Docker builder
+# (fast, with layer caching). Requires the Blacksmith GitHub App installed.
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  artifacts:
+    name: Jars -> GitHub Release
+    runs-on: blacksmith-4vcpu-ubuntu-2204
+    permissions:
+      contents: write          # create the release + upload jars
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Cache Gradle
+        uses: useblacksmith/cache@v5
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle', 'gradle.properties', 'gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+
+      - name: Build mod + launcher jars
+        run: ./gradlew build --no-daemon --stacktrace
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            build/libs/mezzosopranoclef-*.jar
+            launcher/build/libs/mezzosopranoclef-launcher-*.jar
+
+  image:
+    name: Docker image -> GHCR
+    runs-on: blacksmith-4vcpu-ubuntu-2204
+    permissions:
+      contents: read
+      packages: write          # push to GHCR
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Docker tags + labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}   # metadata-action lowercases this
+          tags: |
+            type=semver,pattern={{version}}
+            type=raw,value=latest
+
+      - name: Set up Blacksmith Docker builder
+        uses: useblacksmith/setup-docker-builder@v1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push (linux/amd64)
+        uses: useblacksmith/build-push-action@v1
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

@@ -1,8 +1,11 @@
 name: CI
 
-# Build + test on every push and pull request (all branches, incl. main/master
-# via the default behaviour). workflow_dispatch is included so the heavy "e2e"
-# job below can be kicked off manually from the Actions tab.
+# Build + test on every push and pull request. workflow_dispatch lets the heavy
+# e2e job be kicked off by hand from the Actions tab.
+#
+# Runs on Blacksmith runners (https://useblacksmith.com). Requires the Blacksmith
+# GitHub App to be installed on the repo/org; otherwise change `runs-on` back to
+# `ubuntu-latest`.
 on:
   push:
   pull_request:
@@ -11,9 +14,13 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -23,35 +30,46 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-          cache: gradle
+
+      # Blacksmith's drop-in cache (faster than the GitHub cache backend). Caching
+      # ~/.gradle includes the Loom/Minecraft download, so reruns skip re-fetching it.
+      - name: Cache Gradle
+        uses: useblacksmith/cache@v5
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle', 'gradle.properties', 'gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
 
       - name: Make gradlew executable
         run: chmod +x ./gradlew
 
-      # `./gradlew build` compiles the mod, runs the JUnit unit + integration
-      # test suites, and remaps the jar (Fabric/Loom) into build/libs.
-      - name: Build (compile, JUnit tests, remap jar)
+      # `./gradlew build` compiles the mod + launcher, runs the JUnit suites, and
+      # remaps the jar (Fabric/Loom) into build/libs.
+      - name: Build (compile, JUnit tests, remap jar, launcher jar)
         run: ./gradlew build --stacktrace --no-daemon
 
-      - name: Upload mod jar
+      - name: Upload jars
         uses: actions/upload-artifact@v4
         with:
-          name: mod-jar
-          path: build/libs/*.jar
+          name: jars
+          path: |
+            build/libs/*.jar
+            launcher/build/libs/*.jar
 
   # ---------------------------------------------------------------------------
   # Heavy end-to-end job: MANUAL ONLY (workflow_dispatch).
   #
-  # This is intentionally NOT run on push/PR because it is expensive and slow:
-  #   * it downloads Minecraft client/server assets and a server jar,
-  #   * it boots a real (headless) game client/bot, which needs a virtual
-  #     display (xvfb) and software OpenGL (LIBGL_ALWAYS_SOFTWARE=1).
-  # It is marked continue-on-error so a flaky/slow e2e run can never block CI.
+  # Boots a real headless server + bot and asserts it joins the world and can take
+  # a GPU-free screenshot. With no-GL mode this needs NO xvfb and NO software GL —
+  # on a displayless runner the bot boots on the GLFW null platform. Marked
+  # continue-on-error so a flaky/slow run never blocks CI.
   # ---------------------------------------------------------------------------
   e2e:
-    # Only run when triggered by hand from the Actions tab.
     if: ${{ github.event_name == 'workflow_dispatch' }}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     timeout-minutes: 30
     continue-on-error: true
     steps:
@@ -63,17 +81,20 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-          cache: gradle
 
-      - name: Install xvfb (virtual framebuffer for headless GL)
-        run: sudo apt-get update && sudo apt-get install -y xvfb
+      - name: Cache Gradle
+        uses: useblacksmith/cache@v5
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle', 'gradle.properties', 'gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
 
       - name: Make scripts executable
         run: chmod +x ./gradlew ./scripts/*.sh
 
-      # Run the e2e harness under a virtual display, forcing software GL so the
-      # game can render without a real GPU.
-      - name: Run e2e under virtual display
-        run: xvfb-run -a ./scripts/e2e.sh
-        env:
-          LIBGL_ALWAYS_SOFTWARE: '1'
+      # no-GL boot needs no virtual display: the bot runs windowless on the null platform.
+      - name: Run e2e (headless, no GPU/display)
+        run: ./scripts/e2e.sh
