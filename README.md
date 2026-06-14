@@ -303,21 +303,16 @@ To deploy into an existing launcher (Prism/MultiMC/etc.), drop the built jar + F
 
 ### CI & releases
 
-CI runs on [Blacksmith](https://useblacksmith.com) runners (`.github/workflows`):
+GitHub Actions (`.github/workflows`):
 
 - **`ci.yml`** — builds the mod + launcher and runs the 63 tests on every push/PR (the heavy
   server e2e is manual via *workflow_dispatch*; no-GL means it needs no xvfb).
 - **`release.yml`** — on a `vX.Y.Z` tag: attaches the **mod jar + launcher jar** to a GitHub
-  Release and pushes the **Docker image to GHCR** (`ghcr.io/<owner>/<repo>`), built with
-  Blacksmith's Docker builder.
+  Release and pushes the **Docker image to GHCR** (`ghcr.io/<owner>/<repo>`).
 
 ```bash
 git tag v0.1.0 && git push origin v0.1.0      # -> Release with jars + GHCR image
 ```
-
-> Blacksmith runners require the Blacksmith GitHub App installed on the repo/org. Without it,
-> change `runs-on: blacksmith-4vcpu-ubuntu-2204` back to `ubuntu-latest` and swap
-> `useblacksmith/cache` → `actions/cache` and the `useblacksmith/*-docker-*` actions → `docker/*`.
 
 ---
 

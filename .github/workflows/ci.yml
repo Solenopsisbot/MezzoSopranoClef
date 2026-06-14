@@ -2,10 +2,6 @@ name: CI
 
 # Build + test on every push and pull request. workflow_dispatch lets the heavy
 # e2e job be kicked off by hand from the Actions tab.
-#
-# Runs on Blacksmith runners (https://useblacksmith.com). Requires the Blacksmith
-# GitHub App to be installed on the repo/org; otherwise change `runs-on` back to
-# `ubuntu-latest`.
 on:
   push:
   pull_request:
@@ -20,7 +16,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: blacksmith-4vcpu-ubuntu-2204
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -30,18 +26,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-
-      # Blacksmith's drop-in cache (faster than the GitHub cache backend). Caching
-      # ~/.gradle includes the Loom/Minecraft download, so reruns skip re-fetching it.
-      - name: Cache Gradle
-        uses: useblacksmith/cache@v5
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle', 'gradle.properties', 'gradle/wrapper/gradle-wrapper.properties') }}
-          restore-keys: |
-            gradle-${{ runner.os }}-
+          cache: gradle
 
       - name: Make gradlew executable
         run: chmod +x ./gradlew
@@ -69,7 +54,7 @@ jobs:
   # ---------------------------------------------------------------------------
   e2e:
     if: ${{ github.event_name == 'workflow_dispatch' }}
-    runs-on: blacksmith-4vcpu-ubuntu-2204
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     continue-on-error: true
     steps:
@@ -81,16 +66,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-
-      - name: Cache Gradle
-        uses: useblacksmith/cache@v5
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle', 'gradle.properties', 'gradle/wrapper/gradle-wrapper.properties') }}
-          restore-keys: |
-            gradle-${{ runner.os }}-
+          cache: gradle
 
       - name: Make scripts executable
         run: chmod +x ./gradlew ./scripts/*.sh
