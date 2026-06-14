@@ -28,6 +28,25 @@ public final class ClefConfig {
     /** Per-loop sleep (ms) while in-world rendering is skipped — keeps idle CPU low. Higher =
      *  lower CPU but slightly more command latency. Must stay well under 50ms to keep 20 TPS. */
     public int headlessLoopSleepMs = 20;
+    /**
+     * Headless only. When true, the client boots with a stub GPU device and <b>never creates or
+     * touches an OpenGL context</b> — zero GPU work, runs on any host with no GPU. The default
+     * {@code software} screenshot backend works without GL; this is auto-disabled when
+     * {@code screenshot.backend=gl} (which physically requires a real context).
+     */
+    public boolean noGl = true;
+    /**
+     * How the GLFW window is created in headless mode:
+     * <ul>
+     *   <li>{@code "auto"} (default) — {@code none} on a Linux host with no DISPLAY (so no
+     *       {@code xvfb} is needed), otherwise {@code hidden}.</li>
+     *   <li>{@code "none"} — GLFW null platform: no window, no display server, no GPU. Requires
+     *       {@link #noGl}.</li>
+     *   <li>{@code "hidden"} — create a real (hidden) window; needed if you want the {@code gl}
+     *       screenshot backend.</li>
+     * </ul>
+     */
+    public String windowMode = "auto";
 
     public static final class Auth {
         /** "offline" or "microsoft". */
@@ -135,6 +154,12 @@ public final class ClefConfig {
     public void applySystemPropertyOverrides() {
         String hl = System.getProperty("mezzoclef.headless");
         if (hl != null) headless = Boolean.parseBoolean(hl);
+        String ls = System.getProperty("mezzoclef.loopSleepMs");
+        if (ls != null) try { headlessLoopSleepMs = Integer.parseInt(ls); } catch (NumberFormatException ignored) {}
+        String ng = System.getProperty("mezzoclef.nogl");
+        if (ng != null) noGl = Boolean.parseBoolean(ng);
+        String wm = System.getProperty("mezzoclef.window");
+        if (wm != null) windowMode = wm;
 
         String wsHost = System.getProperty("mezzoclef.ws.host");
         if (wsHost != null) control.host = wsHost;

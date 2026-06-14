@@ -2,12 +2,38 @@
 
 *by Solenopsisbot*
 
-A **headless, render-on-demand Minecraft client** for botting, built as a Fabric mod for
-**Minecraft 1.21.8**. It runs the *real* game client (so client-side Fabric mods and Baritone
-work), but rips out per-frame rendering, the window, and audio. The GPU only ever does work
-when you explicitly ask for a screenshot — at any position, angle, and resolution you want.
+A **headless Minecraft bot client** for **Minecraft 1.21.8**, built as a Fabric mod. It runs the
+*real* game client — so client-side Fabric mods and Baritone Just Work — but rips out the window,
+audio, and rendering. By default it **never even creates an OpenGL context**, so it runs anywhere:
+any server, no GPU, no display. You drive it over a simple **WebSocket/JSON API** (or a built-in web
+dashboard), and it can still take real screenshots of the world on demand, GPU-free.
 
 Think: *Baritone's brain in a client that's asleep until you poke it.*
+
+**What you get**
+
+- **Full player control over WebSocket/JSON** — move, mine, place, attack, use items, manage your
+  inventory, and drive any vanilla/modded container UI (chests, furnaces, villager trades…), plus a
+  live event stream (chat, health, deaths, entities…).
+- **Baritone** bundled and driven for you — pathfinding, mining, following, building.
+- **GPU-free screenshots** at any position / angle / resolution (a CPU raycaster; no GPU needed).
+- **Microsoft (online) and offline auth**; run one bot or a whole **fleet** of them.
+- A built-in **web dashboard** so you can click around without writing any code.
+
+**What it is *not*:** a protocol/packet bot (it runs the real client, not an emulator), a server or
+proxy, or a hacked-client GUI. Running the real client is the whole point — it's what lets mods and
+Baritone work and screenshots be real.
+
+**Requirements:** just a JDK (21+) — Gradle auto-provisions the right one if you don't have it.
+Runs on macOS, Windows, and Linux, including headless servers with no display and no GPU.
+
+## Contents
+
+- [Quick start](#quick-start) — get a bot running in one command
+- [Configuration](#configuration) · [Control plane API](#control-plane-websocket--json) · [Commands](#commands) · [Events](#events) · [Web dashboard](#web-dashboard)
+- [Running headless (no GPU / no display)](#running-truly-headless-no-display--no-gpu) · [Performance & footprint](#performance--footprint)
+- [Multiple bots (fleet)](#running-multiple-bots-a-fleet) · [Account profiles](#run-profiles-switch-accounts-on-one-bot) · [Baritone](#baritone-bundled-automatic)
+- [Microsoft auth setup](#microsoft-auth-setup-one-time) · [Build & versions](#build) · [Testing](#testing) · [Project layout](#project-layout)
 
 ---
 
@@ -22,11 +48,15 @@ Both require running the actual Minecraft client. A protocol-level bot (Mineflay
 load client mods and has no real renderer, so it's off the table. Instead we run the real
 client and:
 
-- **Skip the render loop** — `MinecraftClientHeadlessMixin` cancels `MinecraftClient.render(boolean)`
-  every frame while headless. Game ticks, networking, physics and entity tracking keep running.
-  It also paces the loop (the render path is normally what throttles it) so idle CPU stays near zero.
-- **Hide the window** — `WindowMixin` keeps the GLFW window created (so a real GL context exists
-  for screenshots) but never shows it.
+- **Skip the render loop** — `MinecraftClientHeadlessMixin` cancels the world/GUI draw every frame
+  while headless. Game ticks, networking, physics and entity tracking keep running. It also paces
+  the loop (the render path is normally what throttles it) so idle CPU stays near zero.
+- **Never touch the GPU** — by default (`noGl`) `RenderSystemNoGlMixin` installs a stub
+  `GpuDevice` in place of Minecraft's `GlBackend`, so the client **boots without ever creating an
+  OpenGL context.** No GPU, no drivers, no llvmpipe — on any platform. On a Linux host with no
+  display it also boots on the GLFW *null platform*, so **no `xvfb` either**.
+- **Hide the window** — `WindowMixin` keeps a GLFW window created but never shows it (or skips it
+  entirely on the null platform). With `noGl` the window's GL context is never even made current.
 - **Mute audio** — in headless mode the client sets master volume to 0 once options are ready.
   We keep the sound engine intact because tearing it down can crash gameplay sounds.
 - **Screenshot on demand, GPU-free** — the default `software` backend is a CPU voxel raycaster
@@ -48,7 +78,7 @@ calls were verified against the actual mapped game — not guessed.
 resolve, auth module, WebSocket control plane, command layer, Baritone reflective bridge,
 session injection, server connect/disconnect, chat/look/players/status.
 
-**Verified by the test suite (`./gradlew test`, 48 tests, all green):** the RFC 6455 WebSocket
+**Verified by the test suite (`./gradlew test`, 63 tests, all green):** the RFC 6455 WebSocket
 codec (handshake, masking, fragmentation, ping/pong, close, oversized-frame rejection); the full
 control-plane wire over a real socket (dispatch, `ping`/`help`/error, **event subscription
 filtering** with two clients) via an in-process `ControlServer`; the **complete Microsoft auth
@@ -63,6 +93,12 @@ and spawns as `ClefBot`**, then — asserted programmatically — **walks** (pos
 **breaks** and **mines** blocks (verified turning to air), selects hotbar slots, lists
 inventory/entities, receives **chat events**, and produces a **GPU-free PNG screenshot**.
 Render-skip engages only in-world so the loading screen never deadlocks.
+
+**Validated live with `noGl` (GPU-free boot, macOS):** the client boots all the way to the title
+screen with **OpenGL never initialised** — the full resource reload (atlas stitch, model bake) and
+the loading-screen render run through the stub `GpuDevice`, the overlay dismisses itself, and the
+control plane stays responsive (`ping`/`status`/`nav.status`), with Baritone loaded and the
+screenshot backend on `software`. See *Running truly headless* below.
 
 **Still worth knowing:**
 
@@ -82,9 +118,10 @@ placing, using items, combat, hotbar/inventory, **driving any vanilla/modded con
 (chests, furnaces, crafting, anvils, **villager/wandering-trader trades**), generic screen widgets,
 right-click entity interaction (mount/trade/breed), timed use (eat/drink/charge bow), swap-hand,
 pick-block, **death events + auto-respawn**, world/UI queries (inventory, entities, scoreboard,
-boss bars, title), Baritone pathing, a live event stream, and GPU-free screenshots. Idle in-world
-CPU is roughly ~10–25% of one core (tunable via `headlessLoopSleepMs`); the floor is the
-unavoidable 20 TPS simulation, so you can run several bots per core.
+boss bars, title), Baritone pathing, a live event stream, and GPU-free screenshots. Benchmarked on
+a real generated overworld: **~7% of one core standing still, ~24% while Baritone is actively
+pathing, ~300–375 MB live heap** — see [Performance & footprint](#performance--footprint). The floor
+is the unavoidable 20 TPS simulation, so you can run several bots per core.
 
 The remaining gaps to literal 100% parity are mostly convenience wrappers over primitives that
 already exist (e.g. a high-level `craft <item>` on top of `clickSlot`), and a few niche reads
@@ -243,13 +280,16 @@ First run writes `config/mezzoclef.json`. Anything can be overridden by a `-Dmez
     "maxEntities": 64                  // software: max nearby entities drawn per capture
   },
   "headless": true,
-  "headlessLoopSleepMs": 20            // idle in-world CPU pacing (higher = less CPU, more latency)
+  "headlessLoopSleepMs": 20,           // idle in-world CPU pacing (higher = less CPU, more latency)
+  "noGl": true,                        // boot with a stub GPU device — never create/touch an OpenGL context
+  "windowMode": "auto"                 // "auto" | "none" (GLFW null platform, no display) | "hidden"
 }
 ```
 
 Handy overrides: `-Dmezzoclef.headless=false`, `-Dmezzoclef.ws.port=9000`,
 `-Dmezzoclef.auth.mode=microsoft`, `-Dmezzoclef.auth.username=Steve`,
-`-Dmezzoclef.connect.auto=true`, `-Dmezzoclef.connect.host=...`, `-Dmezzoclef.screenshot.backend=gl`.
+`-Dmezzoclef.connect.auto=true`, `-Dmezzoclef.connect.host=...`, `-Dmezzoclef.screenshot.backend=gl`,
+`-Dmezzoclef.nogl=false` (boot with real OpenGL), `-Dmezzoclef.window=none` (force the no-display GLFW null platform).
 
 ---
 
@@ -446,7 +486,7 @@ the generated `control.authToken` into the token field before sending commands.
 ## Testing
 
 ```bash
-./gradlew test        # 48 unit + integration tests, no Minecraft client required
+./gradlew test        # 63 unit + integration tests, no Minecraft client required
 ```
 
 Covers (all green, GPU-free):
@@ -459,7 +499,9 @@ Covers (all green, GPU-free):
 - **Microsoft auth flow** — the entire device-code → XBL → XSTS → MC → profile chain (plus refresh
   and error paths) against a local mock HTTP server (`MicrosoftAuthFlowTest`).
 - **Auth** — offline UUID determinism + v3, MSA UUID handling, empty-client-id rejection.
-- **Config** — defaults, round-trip, `-D` overrides.
+- **Config** — defaults, round-trip, `-D` overrides (incl. `noGl` / `windowMode`).
+- **No-GL window-mode decision** — the pure logic that picks hidden window vs the GLFW null
+  platform per OS / display / GPU-free state (`NoGlModeTest`).
 - **CPU renderer** — Minecraft-accurate look vectors, ground/sky, **entity hits + occlusion**,
   dimensions, PNG round-trip; plus extracted `MovementMath` and `SnapshotBounds`
   (`SoftwareRaycasterTest`, `MovementMathTest`, `SnapshotBoundsTest`, `PngEncoderTest`).
@@ -492,20 +534,51 @@ and run it on a real host or CI.
 
 ## Running truly headless (no display / no GPU)
 
-Two distinct concerns:
+**This is the default — no GPU, and (on a displayless Linux host) no `xvfb`.** In headless mode the
+client boots with a stub GPU device (`noGl: true`) and **never creates or touches an OpenGL
+context.** `RenderSystemNoGlMixin` intercepts the one call site that builds Minecraft's `GlBackend`
+(whose constructor is what does `glfwMakeContextCurrent` + `GL.createCapabilities()` and starts
+hitting the driver), installs a no-op `NoGlDevice` in its place, and cancels. Textures/buffers/
+pipelines become pure metadata, uploads are dropped, draws do nothing. The default `software`
+screenshot backend rasterizes on the CPU and never goes through the device, so captures still work
+with **zero GPU**.
 
-1. **Screenshots** need no GPU at all — the default `software` backend rasterizes on the CPU.
-2. **Booting Minecraft** still initialises a GL context (the blaze3d `GpuDevice`), so the client
-   itself needs *some* OpenGL even though we never draw a frame.
+Two layers, both automatic:
 
-- **macOS / Windows / Linux-with-display:** works out of the box — GLFW makes a hidden window.
-- **Linux servers with no display/GPU:** run under a virtual framebuffer with Mesa's software
-  rasterizer (llvmpipe) — no GPU required:
-  ```bash
-  LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s "-screen 0 1280x720x24" ./gradlew runClient
-  ```
-  With the `software` screenshot backend, the captures themselves involve zero GPU work; the GL
-  context exists only to satisfy the engine's boot.
+- **No GPU (`noGl`, default on):** works on **any** platform — macOS, Windows, Linux with or
+  without a GPU. No drivers, no Mesa/llvmpipe.
+- **No display (`windowMode: "auto"`, default):** drops the window entirely via the GLFW *null
+  platform* on a Linux host with **no `DISPLAY`** — so you don't need `xvfb` either. On a desktop or
+  macOS it keeps a cheap hidden window instead. Force it anywhere with `windowMode: "none"` (or
+  `-Dmezzoclef.window=none`).
+
+So on a bare Linux server you just run — no virtual framebuffer, no software GL, no GPU:
+```bash
+./gradlew runClient        # boots straight to a headless title screen
+```
+
+**Verified live** (macOS, `noGl`): boots to `TitleScreen` with the resource reload completed
+(`overlay: none`), control plane responsive (`ping`/`status`/`nav.status` all answer), Baritone
+detected, screenshot backend forced to `software` — with OpenGL never initialised and the render
+loop skipping every frame (`skippedFrames` climbing). The atlas stitch + model bake + loading-screen
+render all run through the stub device with no GL. `status` reports the live mode:
+`{"noGl": true, "noWindow": false, ...}`.
+
+**Extra efficiency when not rendering.** Because nothing is ever drawn, no-gl mode also drops
+texture **mipmaps** (`Mipmap Levels: OFF`) — they only exist for GPU sampling at distance — which
+skips all mipmap generation during the atlas stitch and the extra per-sprite pixel data. The base
+textures, sprite UVs and dimensions stay intact, so every feature that reads them still works.
+(`mixin.client.MinecraftClientNoGlMixin` is the home for these "draw-only data we can skip" tweaks.)
+
+> **Want vanilla-fidelity `gl` screenshots instead?** Set `screenshot.backend=gl`. That physically
+> needs a real GL context, so it automatically keeps OpenGL on (disables `noGl`) and a hidden
+> window — and on a displayless Linux box you'd then still need `xvfb` + llvmpipe for that one
+> feature. The GPU-free `software` backend remains the default and the recommended path.
+
+> **macOS note.** The GLFW null platform (`windowMode: "none"`) stalls on macOS (GLFW must own the
+> main thread there), so it is never selected on macOS — `auto` and even an explicit `none` fall
+> back to a hidden window (still fully GPU-free). The null platform is for Linux/CI hosts with no
+> display. On macOS, GPU-free + hidden window is the verified path.
 
 **No Dock icon / app on macOS.** In headless mode the client flips its `NSApplication` activation
 policy to *Accessory*, so it does **not** show a Dock icon or app-switcher entry and never steals
@@ -514,6 +587,60 @@ focus (verified: `lsappinfo` reports `type="UIElement"`). It's a true background
 **Audio is muted** in headless mode (master volume → 0). We don't tear down the sound engine —
 that crashes gameplay sounds on a half-initialised OpenAL — we just silence it; on an audio-less
 server Minecraft disables sound on its own anyway.
+
+---
+
+## Performance & footprint
+
+Benchmarked on a 10-core machine, headless + no-GL, against a **real generated overworld**
+(view-distance 10) — not a flat test world:
+
+| State | CPU (one core) | Live heap (post-GC) |
+|---|---|---|
+| Title screen, idle | ~3% | ~255 MB |
+| In a world, standing still | ~7% | ~300 MB |
+| Actively pathing (Baritone `goto`) | ~24% | ~340–375 MB |
+
+Worker threads are capped at 4; committed heap peaked ~600 MB while exploring (under the 768 MB cap).
+
+What that means:
+
+- **CPU is simulation-bound.** The render thread is *asleep* in the pace loop — no draw, no buffer
+  swap, no GLFW poll — so the cost is just Minecraft's unavoidable 20 TPS world tick + networking.
+  Standing still is ~7% of a core; running a Baritone task is ~24% (pathfinding + chunk processing).
+  Raising `headlessLoopSleepMs` does **not** lower it (measured), so you can run several bots per core.
+- **No GPU memory, no render scratch.** No-GL means zero textures/meshes/framebuffers on the GPU,
+  and render-skip means **no chunk meshing** in-world — the per-frame and per-chunk render costs that
+  dominate a normal client are simply gone.
+- **The live set (~300 MB idle, ~375 MB and climbing while exploring) is mostly *necessary* Minecraft
+  data** — registries, the collision shapes Baritone needs, fonts, datafixers, baked models — plus the
+  client's chunk cache, which grows with view-distance and explored area. There's no giant waste to
+  slash without dropping features. (~10 MB is dev-only Fabric mappings, absent from a deployed jar;
+  mipmaps are already dropped.) Heavy explorers / large view-distances want `-PmaxHeap=1g`.
+
+### JVM tuning (baked into `runClient` / `runFleet`, all overridable)
+
+A no-render bot has a small heap, so the launch is tuned for a low, bounded footprint:
+
+| Flag | Why |
+|---|---|
+| `-Xmx768m` — `-PmaxHeap=` | Cap the heap; a no-render client never needs the ~2 GB a rendering client wants. Bounds per-bot RAM for fleets. |
+| `-XX:+UseG1GC -XX:MaxGCPauseMillis=50` | Smooth, sub-tick GC pauses. |
+| `-XX:+UseStringDeduplication` | Dedupes the many duplicate registry/NBT strings. |
+| `-XX:G1PeriodicGCInterval=15000` | Hands idle heap back to the OS so RSS shrinks while the bot waits. |
+| `-Dmax.bg.threads=4` — `-PbgThreads=` | Minecraft sizes its worker pool to CPU count; a no-render bot needs few, and this stops a fleet of N bots spawning N×(cores−1) threads. |
+
+Tune at launch — e.g. a dense fleet on a small box:
+
+```bash
+./gradlew runFleet -Pbots=a,b,c,d -PmaxHeap=512m -PbgThreads=2
+```
+
+> **Measuring RAM honestly:** these flags cut the JVM's *committed heap* (≈545 → ≈450 MB here) and
+> bound the ceiling, but **macOS RSS barely moves** — macOS keeps `MADV_FREE`'d pages counted as
+> resident until there's memory pressure, so RSS over-reports there. On Linux (the deploy target)
+> the idle uncommit + cap translate straight into lower RSS. Measure with committed heap
+> (`jcmd <pid> GC.heap_info`) or on a Linux host for a faithful number.
 
 ---
 
@@ -555,20 +682,23 @@ For the things Baritone deliberately *doesn't* do (inventory/containers), use th
 
 ```
 dev.mezzo.clef
-├── MezzoClef / ClefClient / ClefPreLaunch   entrypoints (main / client / preLaunch)
-├── config        ClefConfig (JSON + -D overrides)
-├── headless      HeadlessController (render-skip state + loop pacing)
-├── auth          MSA device-code flow, offline UUID, token cache, session injection
-├── api           WebSocket control plane, command dispatcher, core commands
-│   └── ws        hand-rolled RFC6455 server (zero external deps)
-├── bot           ServerConnector, InputController + BotInput + MovementMath, ActionManager
-├── nav           Navigator + reflective BaritoneNavigator
-├── render        VoxelView, ArrayVoxelView, SoftwareRaycaster, EntityBox, SnapshotBounds,
-│                 PngEncoder, WorldSnapshotter (GPU-free CPU screenshot backend — pure + tested)
-├── screenshot    ScreenshotService (software default backend + optional GL backend)
-└── mixin.client  headless (draw-skip)/window/camera/accessor mixins
+├── MezzoClef / ClefClient / ClefPreLaunch   entrypoints (main / client / preLaunch; preLaunch resolves no-gl/window mode)
+├── config          ClefConfig (JSON + -D overrides; noGl, windowMode)
+├── headless        HeadlessController (render-skip + no-gl/no-window state + loop pacing)
+│   └── nogl        NoGlDevice — GPU-free GpuDevice/CommandEncoder/buffer/texture/pass stubs
+├── auth            MSA device-code flow, offline UUID, token cache, session injection
+├── api             WebSocket control plane, command dispatcher, core commands
+│   └── ws          hand-rolled RFC6455 server (zero external deps)
+├── bot             ServerConnector, InputController + BotInput + MovementMath, ActionManager
+├── nav             Navigator + reflective BaritoneNavigator
+├── render          VoxelView, ArrayVoxelView, SoftwareRaycaster, EntityBox, SnapshotBounds,
+│                   PngEncoder, WorldSnapshotter (GPU-free CPU screenshot backend — pure + tested)
+├── screenshot      ScreenshotService (software default backend + optional GL backend)
+└── mixin.client    render draw-skip + loop pacing, window hide/swap-skip, camera, accessors, and:
+                    RenderSystemNoGlMixin (stub device + GLFW null platform),
+                    MinecraftClientNoGlMixin (drop mipmaps when not rendering)
 
-src/test/java   48 JUnit tests (pure logic, mock-HTTP auth flow, in-process control-plane)
+src/test/java   63 JUnit tests (pure logic incl. no-gl window-mode decision, mock-HTTP auth, in-process control-plane)
 scripts         e2e.sh, fetch-server.sh, ws_probe.py, events_probe.py, verify_live.py
 ```
 

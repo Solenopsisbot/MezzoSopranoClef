@@ -19,6 +19,24 @@ class ClefConfigTest {
         assertEquals(8731, cfg.control.port);
         assertFalse(cfg.control.authToken.isBlank(), "new configs should require a random control token");
         assertEquals("software", cfg.screenshot.backend);
+        // GPU-free boot is the default; window selection is auto.
+        assertTrue(cfg.noGl, "no-gl (GPU-free) boot should default on");
+        assertEquals("auto", cfg.windowMode);
+    }
+
+    @Test
+    void noGlAndWindowOverridesWin(@TempDir Path dir) {
+        Path cfgPath = dir.resolve("mezzoclef.json");
+        System.setProperty("mezzoclef.nogl", "false");
+        System.setProperty("mezzoclef.window", "none");
+        try {
+            ClefConfig cfg = ClefConfig.loadOrCreate(cfgPath);
+            assertFalse(cfg.noGl);
+            assertEquals("none", cfg.windowMode);
+        } finally {
+            System.clearProperty("mezzoclef.nogl");
+            System.clearProperty("mezzoclef.window");
+        }
     }
 
     @Test

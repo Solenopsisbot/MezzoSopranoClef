@@ -4,6 +4,7 @@ import dev.mezzo.clef.MezzoClef;
 import dev.mezzo.clef.headless.HeadlessController;
 import dev.mezzo.clef.headless.MacOsBackgroundApp;
 import net.minecraft.client.util.Window;
+import net.minecraft.client.util.tracy.TracyFrameCapturer;
 import org.lwjgl.glfw.GLFW;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -25,7 +26,12 @@ public class WindowMixin {
 
     @Inject(method = "<init>", at = @At("TAIL"))
     private void clef$hideWindow(CallbackInfo ci) {
-        if (HeadlessController.get().isWindowHidden()) {
+        HeadlessController hc = HeadlessController.get();
+        // Under the GLFW null platform there is no real OS window to hide (and no Dock).
+        if (hc.isNoWindow()) {
+            return;
+        }
+        if (hc.isWindowHidden()) {
             try {
                 GLFW.glfwHideWindow(handle);
             } catch (Throwable t) {
@@ -33,6 +39,19 @@ public class WindowMixin {
             }
             // macOS: also drop the Dock icon / app-switcher entry (GLFW makes us a "regular" app).
             MacOsBackgroundApp.hideFromDock();
+        }
+    }
+
+    /**
+     * In no-GL mode there is no GL context (and possibly no window at all under the null
+     * platform), so there is nothing to present. Skip the buffer swap entirely — otherwise GLFW
+     * would error every frame on a context-less window. The loading overlay still advances
+     * because its progress is driven by the render call, not the swap.
+     */
+    @Inject(method = "swapBuffers", at = @At("HEAD"), cancellable = true)
+    private void clef$skipSwap(TracyFrameCapturer capturer, CallbackInfo ci) {
+        if (HeadlessController.get().isNoGl()) {
+            ci.cancel();
         }
     }
 }

@@ -21,6 +21,21 @@ public final class HeadlessController {
     private volatile boolean muteAudio = true;
 
     /**
+     * When true, Minecraft boots with a stub {@code GpuDevice} and never creates or touches an
+     * OpenGL context (see {@code RenderSystemNoGlMixin}). The default {@code software} screenshot
+     * backend needs no GL, so the bot runs with zero GPU work. Set by {@code ClefPreLaunch} from
+     * config; only meaningful while {@link #isHeadless()}.
+     */
+    private volatile boolean noGl = false;
+
+    /**
+     * When true, GLFW is initialised on its <i>null platform</i> — no window, no display server,
+     * no GPU — so the client boots on a bare host with no {@code xvfb}. Requires {@link #noGl}
+     * (the null platform provides no GL context).
+     */
+    private volatile boolean noWindow = false;
+
+    /**
      * When rendering is skipped, the client's main loop would otherwise busy-spin at 100% CPU
      * (rendering/vsync is what normally paces it). We sleep this many ms per loop instead — low
      * enough to stay responsive to the 20 TPS tick + network, high enough to idle near 0% CPU.
@@ -56,6 +71,22 @@ public final class HeadlessController {
 
     public void setMuteAudio(boolean muteAudio) {
         this.muteAudio = muteAudio;
+    }
+
+    public boolean isNoGl() {
+        return noGl;
+    }
+
+    public void setNoGl(boolean noGl) {
+        this.noGl = noGl;
+    }
+
+    public boolean isNoWindow() {
+        return noWindow;
+    }
+
+    public void setNoWindow(boolean noWindow) {
+        this.noWindow = noWindow;
     }
 
     public int loopSleepMillis() {

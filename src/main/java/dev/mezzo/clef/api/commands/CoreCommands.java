@@ -82,6 +82,8 @@ public final class CoreCommands {
             HeadlessController hc = HeadlessController.get();
             JsonObject o = new JsonObject();
             o.addProperty("headless", hc.isHeadless());
+            o.addProperty("noGl", hc.isNoGl());             // true = booted GPU-free (no OpenGL context)
+            o.addProperty("noWindow", hc.isNoWindow());     // true = GLFW null platform (no display server)
             o.addProperty("skippedFrames", hc.skippedFrames());
             o.addProperty("controllers", ctx.server.connectionCount());
             o.addProperty("singleplayer", mc.isInSingleplayer());

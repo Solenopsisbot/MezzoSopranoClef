@@ -44,6 +44,22 @@ loom {
             if (System.getProperty('mezzoclef.headless') == null) {
                 vmArgs '-Dmezzoclef.headless=true'
             }
+            // --- low-footprint JVM tuning -------------------------------------------------
+            // A headless no-GL bot has a small (~250-350MB) live set, so cap the heap, keep G1
+            // for smooth 20 TPS, dedup the many duplicate strings (registries/NBT), and have G1
+            // periodically hand idle memory back to the OS so RSS shrinks while the bot waits.
+            // All overridable with -PmaxHeap=... (e.g. -PmaxHeap=512m for tight hosts / big fleets).
+            def maxHeap = (project.findProperty('maxHeap') ?: '768m').toString()
+            vmArgs "-Xmx${maxHeap}".toString()
+            vmArgs '-XX:+UseG1GC',
+                   '-XX:MaxGCPauseMillis=50',
+                   '-XX:+UseStringDeduplication',
+                   '-XX:G1PeriodicGCInterval=15000',          // concurrent idle GC -> hand free heap back to the OS
+                   '-XX:MaxMetaspaceSize=256m'
+            // Minecraft sizes its worker pool to CPU count; a no-render bot needs only a few, and
+            // capping it stops a fleet from spawning (cores-1) x N threads. Tune with -PbgThreads.
+            def bgThreads = (project.findProperty('bgThreads') ?: '4').toString()
+            vmArgs "-Dmax.bg.threads=${bgThreads}".toString()
             // A plain `-Dmezzoclef.*` on `./gradlew` only reaches the Gradle daemon JVM, NOT the
             // separate JVM Loom forks for the client — so e.g. `runClient -Dmezzoclef.dashboard=true`
             // was silently dropped. Forward every mezzoclef.* system property into the game JVM.

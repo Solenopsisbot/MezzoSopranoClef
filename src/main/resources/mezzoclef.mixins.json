@@ -5,12 +5,14 @@
   "mixins": [],
   "client": [
     "client.MinecraftClientHeadlessMixin",
+    "client.MinecraftClientNoGlMixin",
     "client.MinecraftClientAccessor",
     "client.WindowMixin",
     "client.WindowAccessor",
     "client.CameraMixin",
     "client.InGameHudAccessor",
-    "client.BossBarHudAccessor"
+    "client.BossBarHudAccessor",
+    "client.RenderSystemNoGlMixin"
   ],
   "injectors": {
     "defaultRequire": 1

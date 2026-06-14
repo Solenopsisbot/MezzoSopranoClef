@@ -43,16 +43,20 @@ public class MinecraftClientHeadlessMixin {
 
     @Inject(method = "render(Z)V", at = @At("TAIL"))
     private void clef$paceLoop(boolean tick, CallbackInfo ci) {
-        // Only pace once in-world (where we skip the draw). On menus/loading we leave Minecraft's
-        // own frame limiter alone — it keeps idle CPU low and behaves correctly.
-        if (clef$goDark()) {
-            int sleep = HeadlessController.get().loopSleepMillis();
-            if (sleep > 0) {
-                try {
-                    Thread.sleep(sleep);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
+        HeadlessController hc = HeadlessController.get();
+        // Pace when we skipped the draw (the normal case), and also during the no-GL loading
+        // screen: there the overlay still draws but the GLFW null platform's frame limiter does
+        // not block, so without this the render thread would busy-spin at 100%. A small sleep only
+        // slows the loading fade slightly — the reload runs on background threads regardless.
+        if (!clef$goDark() && !(hc.isHeadless() && hc.isNoGl())) {
+            return;
+        }
+        int sleep = hc.loopSleepMillis();
+        if (sleep > 0) {
+            try {
+                Thread.sleep(sleep);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
             }
         }
     }
@@ -62,6 +66,13 @@ public class MinecraftClientHeadlessMixin {
         HeadlessController hc = HeadlessController.get();
         if (!hc.isHeadless()) return false;
         MinecraftClient mc = (MinecraftClient) (Object) this;
-        return mc.world != null && mc.getOverlay() == null;
+        // Always let the loading overlay draw: the resource reload advances and the overlay
+        // removes itself from inside its own render method, so skipping it deadlocks startup.
+        if (mc.getOverlay() != null) return false;
+        // No-GL: nothing is ever presented, so skip every non-loading frame (title/menu AND
+        // in-world) — this also avoids needless menu/world geometry work on the CPU.
+        if (hc.isNoGl()) return true;
+        // Legacy headless (real GL + hidden window): keep menus drawing; only skip the in-world draw.
+        return mc.world != null;
     }
 }

@@ -67,6 +67,11 @@ public final class ScreenshotService {
 
     /** The active backend name, for status reporting. */
     public String backend() {
+        // The gl backend needs a real GL context; in no-GL mode there is none, so the GPU-free
+        // software raycaster is the only option (and what makes screenshots work GPU-free anyway).
+        if (dev.mezzo.clef.headless.HeadlessController.get().isNoGl()) {
+            return "software";
+        }
         return "gl".equalsIgnoreCase(config.screenshot.backend) ? "gl" : "software";
     }
 
