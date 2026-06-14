@@ -24,6 +24,21 @@ public class WindowMixin {
 
     @Shadow private long handle;
 
+    /**
+     * On the GLFW null platform (no display), Minecraft's window-hint of {@code GLFW_CLIENT_API =
+     * OPENGL} makes GLFW try to back the window with OSMesa — which slim/headless Linux images
+     * don't ship, so {@code glfwCreateWindow} fails with "OSMesa: Library not found". In no-gl mode
+     * we never use a GL context, so request none. Injected right before {@code glfwCreateWindow} so
+     * the hint is in effect; only when running window-less (the macOS hidden-window path is untouched).
+     */
+    @Inject(method = "<init>", require = 0, at = @At(value = "INVOKE", remap = false,
+            target = "Lorg/lwjgl/glfw/GLFW;glfwCreateWindow(IILjava/lang/CharSequence;JJ)J"))
+    private void clef$noGlContextOnNullPlatform(CallbackInfo ci) {
+        if (HeadlessController.get().isNoWindow()) {
+            GLFW.glfwWindowHint(GLFW.GLFW_CLIENT_API, GLFW.GLFW_NO_API);
+        }
+    }
+
     @Inject(method = "<init>", at = @At("TAIL"))
     private void clef$hideWindow(CallbackInfo ci) {
         HeadlessController hc = HeadlessController.get();

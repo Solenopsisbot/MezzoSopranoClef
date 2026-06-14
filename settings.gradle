@@ -13,3 +13,8 @@ plugins {
 }
 
 rootProject.name = 'MezzoSopranoClef'
+
+// Self-bootstrapping launcher: a standalone jar that downloads Minecraft + Fabric on first run
+// and launches the headless bot — so end users don't need Gradle/Loom. Kept a separate module so
+// the mod itself stays zero-runtime-dependency.
+include 'launcher'

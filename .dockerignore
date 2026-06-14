@@ -1,0 +1,12 @@
+# Keep the build context small + avoid copying local runtime/cache state into the image.
+.git
+.gradle
+build
+launcher/build
+run
+run-fleet
+run-profiles
+e2e
+*.log
+logs
+.DS_Store

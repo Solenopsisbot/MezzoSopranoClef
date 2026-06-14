@@ -30,6 +30,7 @@ Runs on macOS, Windows, and Linux, including headless servers with no display an
 ## Contents
 
 - [Quick start](#quick-start) — get a bot running in one command
+- [Run without Gradle (launcher jar / Docker)](#run-without-gradle-standalone-launcher--docker) — pre-built, `java -jar` or `docker run`
 - [Configuration](#configuration) · [Control plane API](#control-plane-websocket--json) · [Commands](#commands) · [Events](#events) · [Web dashboard](#web-dashboard)
 - [Running headless (no GPU / no display)](#running-truly-headless-no-display--no-gpu) · [Performance & footprint](#performance--footprint)
 - [Multiple bots (fleet)](#running-multiple-bots-a-fleet) · [Account profiles](#run-profiles-switch-accounts-on-one-bot) · [Baritone](#baritone-bundled-automatic)
@@ -156,6 +157,56 @@ servers the default `auth.mode=offline` just works.
 
 To deploy outside dev: `./gradlew build` → drop `build/libs/mezzosopranoclef-0.1.0.jar` + Fabric API
 into a Fabric `mods/` folder.
+
+## Run without Gradle (standalone launcher / Docker)
+
+Don't want Gradle/Loom on the box you run the bot on? Two pre-built options do exactly what
+`runClient` does — download Minecraft + Fabric on first run and launch the headless bot — with no
+dev environment. Minecraft is **not** bundled in either (it isn't redistributable); it downloads
+once into the game directory and is cached.
+
+### Self-bootstrapping launcher jar
+
+```bash
+./gradlew :launcher:jar         # -> launcher/build/libs/mezzosopranoclef-launcher-<ver>.jar
+java -jar mezzosopranoclef-launcher-0.1.0.jar
+```
+
+On first run it fetches the official Minecraft client + libraries + assets (Mojang) and the Fabric
+loader + intermediary mappings (Fabric meta), drops the bundled mod + Fabric API into `mods/`, and
+spawns the client with the GPU-free / headless flags. Knobs (env vars):
+
+- **`CLEF_GAMEDIR`** (default `./mezzosopranoclef`) — where MC, config, and the auth cache live.
+- **`CLEF_SKIP_SOUNDS`** (default `true`) — audio is muted, so sound assets are skipped; that's
+  ~95% of the asset download (4085 of ~4270 objects), so first run is quick. Set `false` to fetch them.
+- **`CLEF_MAX_HEAP`** (`768m`), **`CLEF_BG_THREADS`** (`4`) — same footprint caps as `runClient`.
+- **`CLEF_OPTS`** — space-separated extra flags, e.g.
+  `CLEF_OPTS="-Dmezzoclef.connect.auto=true -Dmezzoclef.connect.host=play.example.com"`.
+  Any `-Dmezzoclef.*` passed straight to the launcher is forwarded to the bot too.
+
+### Docker
+
+```bash
+docker build -t mezzosopranoclef .
+docker run --rm -it -p 8731:8731 -v clef-data:/data \
+  -e CLEF_OPTS="-Dmezzoclef.ws.host=0.0.0.0" mezzosopranoclef
+```
+
+The final image is just a JRE + the launcher (no Minecraft baked in); MC downloads into the `/data`
+volume on first run. Bind the control plane to `0.0.0.0` (above) to reach it from the host — it
+stays token-protected (token generated into `/data/config/mezzoclef.json`). Mount `/data` to
+persist the MC download, config, and auth cache across runs.
+
+The image is pinned to **`linux/amd64`**: Mojang ships LWJGL natives for x86_64 (and macOS) but
+**not linux-arm64**, so the game can't start on arm64 Linux. On an Apple Silicon host it runs under
+emulation (fine for a sim-bound bot); on a normal amd64 server it's native. A harmless
+`flite`/narrator (text-to-speech) warning is logged at startup and ignored.
+
+> **Verified end-to-end.** *Launcher jar (macOS):* `java -jar` → downloads MC + 84 de-duplicated
+> libraries + (non-sound) assets, installs the mods, boots to a responsive control plane, OpenGL
+> never initialised. *Docker (`linux/amd64`):* the container boots on the GLFW **null platform**
+> (`noWindow: true` — no display, no GPU, no xvfb) and the control plane (`status`/`ping`) answers
+> from the host across the port mapping, with Baritone loaded and the software screenshot backend.
 
 ## Running multiple bots (a fleet)
 
@@ -700,6 +751,10 @@ dev.mezzo.clef
 
 src/test/java   63 JUnit tests (pure logic incl. no-gl window-mode decision, mock-HTTP auth, in-process control-plane)
 scripts         e2e.sh, fetch-server.sh, ws_probe.py, events_probe.py, verify_live.py
+
+launcher/       standalone bootstrap module (Launcher.java): downloads MC + Fabric and spawns the
+                client — bundles the mod + Fabric API, depends only on gson. Builds the
+                mezzosopranoclef-launcher jar. (Dockerfile at the repo root builds on it.)
 ```
 
 ## License

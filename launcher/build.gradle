@@ -1,0 +1,70 @@
+plugins {
+    id 'java'
+}
+
+// The launcher is a tiny standalone bootstrap (NOT a Fabric mod). It bundles the built mod jar +
+// Fabric API as resources, and on first run downloads Minecraft + Fabric and spawns the client.
+// It deliberately lives outside Loom so the mod's runtime stays dependency-free; the launcher
+// itself is allowed one dependency (gson) to parse Mojang/Fabric metadata.
+
+repositories {
+    mavenCentral()
+    maven { name = 'Fabric'; url = 'https://maven.fabricmc.net/' }
+}
+
+java {
+    toolchain { languageVersion = JavaLanguageVersion.of(21) }
+}
+
+configurations {
+    // The Fabric API jar we drop into the bot's mods/ folder (no transitives — it's a bundle).
+    bundledMod { transitive = false }
+}
+
+dependencies {
+    implementation 'com.google.code.gson:gson:2.11.0'
+    bundledMod "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+}
+
+// Stage the two jars the bot needs in its mods/ folder: our remapped mod + Fabric API.
+def stageBundled = tasks.register('stageBundled', Copy) {
+    dependsOn rootProject.tasks.named('remapJar')
+    into layout.buildDirectory.dir('bundled')
+    from(rootProject.tasks.named('remapJar').map { it.archiveFile }) { rename { 'mezzosopranoclef.jar' } }
+    from(configurations.bundledMod) { rename { 'fabric-api.jar' } }
+}
+
+// Bake the pinned versions into the jar so the launcher knows what to download.
+processResources {
+    inputs.property 'minecraft', project.minecraft_version
+    inputs.property 'loader', project.loader_version
+    inputs.property 'fabric_api', project.fabric_api_version
+    inputs.property 'mod_version', project.mod_version
+    filesMatching('clef-launcher.properties') {
+        expand minecraft: project.minecraft_version,
+               loader: project.loader_version,
+               fabric_api: project.fabric_api_version,
+               mod_version: project.mod_version
+    }
+}
+
+base { archivesName = 'mezzosopranoclef-launcher' }
+version = project.mod_version
+
+jar {
+    dependsOn stageBundled
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    // Fat jar: fold in gson.
+    from {
+        configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
+    }
+    // Bundle the mod + Fabric API as resources, extracted to <gameDir>/mods on first run.
+    from(layout.buildDirectory.dir('bundled')) { into 'bundled' }
+    manifest {
+        attributes 'Main-Class': 'dev.mezzo.clef.launcher.Launcher',
+                   'Implementation-Title': 'MezzoSopranoClef Launcher',
+                   'Implementation-Version': project.mod_version
+    }
+}
+
+// `./gradlew :launcher:build` produces launcher/build/libs/mezzosopranoclef-launcher-<ver>.jar
