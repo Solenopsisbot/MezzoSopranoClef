@@ -6,6 +6,7 @@ build/
 # Loom / Minecraft run dir
 run/
 run-fleet/
+run-profiles/
 remappedSrc/
 .fabric/
 

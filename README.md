@@ -158,6 +158,29 @@ caches its own refresh token independently. But every bot needs its **own** Micr
 the first run prints a device-code prompt per bot (watch the `[name]` lines). Note each bot is a
 full client JVM, so RAM — not CPU — is the practical ceiling on how many you run at once.
 
+## Run profiles (switch accounts on one bot)
+
+Want several accounts on hand and to switch between them without clobbering each other's config or
+tokens? Pass `-Pprofile=<name>` and `runClient` runs in `run-profiles/<name>/` instead of `run/`,
+so each profile keeps its **own** config (account + auth mode), its own `auth-cache.json` (refresh
+token), and its own logs:
+
+```bash
+./gradlew runClient -Pprofile=alice                          # uses run-profiles/alice/
+./gradlew runClient -Pprofile=bob -Dmezzoclef.dashboard=true
+./gradlew runClient                                          # no profile => default run/ dir
+```
+
+First launch of a profile writes `run-profiles/<name>/config/mezzoclef.json` with defaults; set
+that profile's account in it, or pass it on the command line (these now forward into the game JVM):
+`-Dmezzoclef.auth.mode=microsoft`, `-Dmezzoclef.auth.username=Steve`, etc. A Microsoft profile does
+its own one-time device-code sign-in and caches its refresh token under its own dir, so switching
+back to an already-authed profile never re-prompts.
+
+This is the *switch-between-accounts* tool (one running at a time). To run **several at once**, give
+each a distinct control port (`-Dmezzoclef.ws.port=8741 -Dmezzoclef.dashboard.port=8742`) or use
+`runFleet` above. Profiles live under `run-profiles/` (gitignored).
+
 ## Build
 
 Requires JDK 21 for the game (Gradle auto-provisions it via the foojay toolchain resolver, so you

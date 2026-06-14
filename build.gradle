@@ -35,6 +35,11 @@ loom {
         client {
             client()
             configName = 'Headless Bot Client'
+            // Run profiles: `./gradlew runClient -Pprofile=alice` runs in run-profiles/alice, so
+            // that profile keeps its own config (account + auth mode), its own auth-cache.json
+            // (refresh token) and its own logs. No -Pprofile => the default `run/` dir (unchanged).
+            def clefProfile = project.findProperty('profile')
+            if (clefProfile) runDir("run-profiles/${clefProfile}".toString())
             // Headless by default; overridable via -Dmezzoclef.headless=... on the invocation.
             if (System.getProperty('mezzoclef.headless') == null) {
                 vmArgs '-Dmezzoclef.headless=true'
