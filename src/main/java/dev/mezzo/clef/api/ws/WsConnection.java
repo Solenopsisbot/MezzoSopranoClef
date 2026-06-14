@@ -78,9 +78,26 @@ public final class WsConnection implements AutoCloseable {
      */
     public boolean handshake(Set<String> allowedOrigins) throws IOException {
         Map<String, String> headers = readHttpHeaders();
+        String requestLine = headers.get(":request-line");
+        if (requestLine == null || !requestLine.startsWith("GET ")) {
+            writeHttp("HTTP/1.1 405 Method Not Allowed", "Expected GET WebSocket upgrade");
+            return false;
+        }
+        if (!"websocket".equalsIgnoreCase(headers.getOrDefault("upgrade", ""))) {
+            writeHttp("HTTP/1.1 400 Bad Request", "Expected Upgrade: websocket");
+            return false;
+        }
+        if (!headerContains(headers.get("connection"), "upgrade")) {
+            writeHttp("HTTP/1.1 400 Bad Request", "Expected Connection: Upgrade");
+            return false;
+        }
+        if (!"13".equals(headers.get("sec-websocket-version"))) {
+            writeHttp("HTTP/1.1 426 Upgrade Required", "Expected Sec-WebSocket-Version: 13");
+            return false;
+        }
         String key = headers.get("sec-websocket-key");
-        if (key == null) {
-            writeHttp("HTTP/1.1 400 Bad Request", "Expected a WebSocket upgrade");
+        if (!validClientKey(key)) {
+            writeHttp("HTTP/1.1 400 Bad Request", "Invalid Sec-WebSocket-Key");
             return false;
         }
         String origin = headers.get("origin");
@@ -129,20 +146,35 @@ public final class WsConnection implements AutoCloseable {
             if (payload.size() + len > MAX_MESSAGE_BYTES) {
                 throw new IOException("WebSocket message exceeds limit " + MAX_MESSAGE_BYTES);
             }
+            if (!masked) {
+                throw new IOException("Client WebSocket frames must be masked");
+            }
+            if (opcode >= 0x8 && (!fin || len > 125)) {
+                throw new IOException("Invalid WebSocket control frame");
+            }
 
             byte[] mask = new byte[4];
-            if (masked) readFully(mask, 4);
+            readFully(mask, 4);
 
             byte[] data = new byte[(int) len];
             readFully(data, (int) len);
-            if (masked) {
-                for (int i = 0; i < data.length; i++) data[i] ^= mask[i & 3];
-            }
+            for (int i = 0; i < data.length; i++) data[i] ^= mask[i & 3];
 
             switch (opcode) {
-                case 0x0 -> payload.write(data, 0, data.length);            // continuation
-                case 0x1 -> { messageOpcode = 0x1; payload.write(data, 0, data.length); } // text
-                case 0x2 -> { messageOpcode = 0x2; payload.write(data, 0, data.length); } // binary
+                case 0x0 -> {
+                    if (messageOpcode == -1) throw new IOException("Continuation frame without a message");
+                    payload.write(data, 0, data.length);
+                }
+                case 0x1 -> {
+                    if (messageOpcode != -1) throw new IOException("New text frame before fragmented message completed");
+                    messageOpcode = 0x1;
+                    payload.write(data, 0, data.length);
+                }
+                case 0x2 -> {
+                    if (messageOpcode != -1) throw new IOException("New binary frame before fragmented message completed");
+                    messageOpcode = 0x2;
+                    payload.write(data, 0, data.length);
+                }
                 case 0x8 -> { sendClose(); return null; }                    // close
                 case 0x9 -> { sendFrame(0xA, data); continue; }              // ping -> pong
                 case 0xA -> { continue; }                                    // pong
@@ -153,6 +185,7 @@ public final class WsConnection implements AutoCloseable {
                 if (messageOpcode == 0x2) {
                     // Binary not used by the control protocol; surface as empty + ignore.
                     payload.reset();
+                    messageOpcode = -1;
                     continue;
                 }
                 return payload.toString(StandardCharsets.UTF_8);
@@ -220,7 +253,8 @@ public final class WsConnection implements AutoCloseable {
                 line.reset();
                 if (s.isEmpty()) break; // end of headers
                 if (firstLine) {
-                    firstLine = false; // request line, ignore
+                    firstLine = false;
+                    headers.put(":request-line", s);
                 } else {
                     int colon = s.indexOf(':');
                     if (colon > 0) {
@@ -242,6 +276,23 @@ public final class WsConnection implements AutoCloseable {
         out.write(head.getBytes(StandardCharsets.UTF_8));
         out.write(b);
         out.flush();
+    }
+
+    private static boolean headerContains(String header, String token) {
+        if (header == null) return false;
+        for (String part : header.split(",")) {
+            if (part.trim().equalsIgnoreCase(token)) return true;
+        }
+        return false;
+    }
+
+    private static boolean validClientKey(String key) {
+        if (key == null) return false;
+        try {
+            return Base64.getDecoder().decode(key).length == 16;
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
     }
 
     private int readByte() throws IOException {

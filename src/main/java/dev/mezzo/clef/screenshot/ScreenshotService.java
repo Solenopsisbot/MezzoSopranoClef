@@ -9,6 +9,7 @@ import dev.mezzo.clef.render.ArrayVoxelView;
 import dev.mezzo.clef.render.EntityBox;
 import dev.mezzo.clef.render.PngEncoder;
 import dev.mezzo.clef.render.RenderCamera;
+import dev.mezzo.clef.render.SnapshotBounds;
 import dev.mezzo.clef.render.SoftwareRaycaster;
 import dev.mezzo.clef.render.WorldSnapshotter;
 import net.minecraft.client.MinecraftClient;
@@ -51,10 +52,14 @@ public final class ScreenshotService {
                                  Float yaw, Float pitch,
                                  Integer width, Integer height, Float fov) {}
 
+    public record CaptureMetrics(String backend, int width, int height, int bytes,
+                                 double totalMs, double snapshotMs, double renderMs, double pngMs) {}
+
     private static volatile CameraOverride ACTIVE_OVERRIDE;
 
     private final ClefConfig config;
     private final Semaphore captureSlot = new Semaphore(1);
+    private volatile CaptureMetrics lastMetrics;
 
     public ScreenshotService(ClefConfig config) {
         this.config = config;
@@ -73,6 +78,10 @@ public final class ScreenshotService {
             return "software";
         }
         return "gl".equalsIgnoreCase(config.screenshot.backend) ? "gl" : "software";
+    }
+
+    public CaptureMetrics lastMetrics() {
+        return lastMetrics;
     }
 
     /** Capture a PNG. Safe to call from any thread; bounces to the client thread internally. */
@@ -95,6 +104,8 @@ public final class ScreenshotService {
     private byte[] captureSoftware(CaptureRequest req) throws Exception {
         MinecraftClient mc = MinecraftClient.getInstance();
         CompletableFuture<Snapshot> snapFuture = new CompletableFuture<>();
+        long totalStart = System.nanoTime();
+        long snapshotStart = totalStart;
         mc.execute(() -> {
             try {
                 snapFuture.complete(buildSnapshot(mc, req));
@@ -103,10 +114,17 @@ public final class ScreenshotService {
             }
         });
         Snapshot s = snapFuture.get(20, TimeUnit.SECONDS);
+        long snapshotEnd = System.nanoTime();
 
         // Heavy work off the client thread — does not touch Minecraft or GL.
+        long renderStart = snapshotEnd;
         int[] argb = SoftwareRaycaster.render(s.view(), s.cam(), s.entities(), s.skyTop(), s.skyBottom());
+        long renderEnd = System.nanoTime();
         byte[] png = PngEncoder.toPng(argb, s.cam().width(), s.cam().height());
+        long pngEnd = System.nanoTime();
+        lastMetrics = new CaptureMetrics("software", s.cam().width(), s.cam().height(), png.length,
+                nanosToMs(pngEnd - totalStart), nanosToMs(snapshotEnd - snapshotStart),
+                nanosToMs(renderEnd - renderStart), nanosToMs(pngEnd - renderEnd));
         MezzoClef.LOG.debug("Software screenshot {}x{} ({} bytes) at ({},{},{}) yaw={} pitch={}",
                 s.cam().width(), s.cam().height(), png.length,
                 s.cam().x(), s.cam().y(), s.cam().z(), s.cam().yaw(), s.cam().pitch());
@@ -137,8 +155,8 @@ public final class ScreenshotService {
         int height = clamp(req.height() != null ? req.height() : config.screenshot.defaultHeight,
                 1, config.screenshot.maxHeight);
         validatePixelBudget(width, height);
-        float fov = req.fov() != null ? req.fov() : config.screenshot.defaultFov;
-        int radius = clamp(config.screenshot.maxRayDistance, 8, 192);
+        float fov = clampFov(req.fov() != null ? req.fov() : config.screenshot.defaultFov);
+        int radius = clampRadiusToSnapshotBudget(world, x, y, z, clamp(config.screenshot.maxRayDistance, 8, 192));
 
         ArrayVoxelView view = WorldSnapshotter.snapshotBlocks(world, x, y, z, radius);
         List<EntityBox> entities = WorldSnapshotter.snapshotEntities(
@@ -161,8 +179,11 @@ public final class ScreenshotService {
         try {
             MinecraftClient mc = MinecraftClient.getInstance();
             CompletableFuture<byte[]> out = new CompletableFuture<>();
+            long start = System.nanoTime();
             mc.execute(() -> renderGl(mc, req, out));
-            return out.get(30, TimeUnit.SECONDS);
+            byte[] png = out.get(30, TimeUnit.SECONDS);
+            lastMetrics = new CaptureMetrics("gl", 0, 0, png.length, nanosToMs(System.nanoTime() - start), 0, 0, 0);
+            return png;
         } finally {
             glLock.unlock();
         }
@@ -196,7 +217,7 @@ public final class ScreenshotService {
             out.completeExceptionally(t);
             return;
         }
-        float fov = req.fov() != null ? req.fov() : config.screenshot.defaultFov;
+        float fov = clampFov(req.fov() != null ? req.fov() : config.screenshot.defaultFov);
 
         Window window = mc.getWindow();
         WindowAccessor winAcc = (WindowAccessor) (Object) window;
@@ -258,6 +279,25 @@ public final class ScreenshotService {
         return Math.max(lo, Math.min(hi, v));
     }
 
+    private static float clampFov(float fov) {
+        if (!Float.isFinite(fov)) return 70.0f;
+        return Math.max(1.0f, Math.min(179.0f, fov));
+    }
+
+    private int clampRadiusToSnapshotBudget(ClientWorld world, double x, double y, double z, int radius) {
+        int budget = Math.max(1, config.screenshot.maxSnapshotBlocks);
+        int worldBottom = world.getBottomY();
+        int worldTop = world.getBottomY() + world.getHeight() - 1;
+        int bx = (int) Math.floor(x), by = (int) Math.floor(y), bz = (int) Math.floor(z);
+        while (radius > 8) {
+            SnapshotBounds b = SnapshotBounds.compute(bx, by, bz, radius, worldBottom, worldTop);
+            long volume = (long) b.sizeX() * b.sizeY() * b.sizeZ();
+            if (volume <= budget) break;
+            radius--;
+        }
+        return radius;
+    }
+
     private void validatePixelBudget(int width, int height) {
         int maxPixels = Math.max(1, config.screenshot.maxPixels);
         long pixels = (long) width * height;
@@ -265,5 +305,9 @@ public final class ScreenshotService {
             throw new IllegalArgumentException("screenshot " + width + "x" + height
                     + " exceeds maxPixels=" + maxPixels);
         }
+    }
+
+    private static double nanosToMs(long nanos) {
+        return nanos / 1_000_000.0;
     }
 }

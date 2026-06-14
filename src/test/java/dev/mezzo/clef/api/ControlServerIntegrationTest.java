@@ -244,6 +244,90 @@ class ControlServerIntegrationTest {
         }
     }
 
+    @Test
+    void readOnlyTokenCannotRunMutatingCommands() throws Exception {
+        int port;
+        try (ServerSocket ss = new ServerSocket(0)) {
+            port = ss.getLocalPort();
+        }
+        ClefConfig cfg = new ClefConfig();
+        cfg.control.host = "127.0.0.1";
+        cfg.control.port = port;
+        cfg.control.authToken = "full";
+        cfg.control.readOnlyAuthToken = "read";
+        ControlServer server = new ControlServer(cfg,
+                new ClefServices(new ScreenshotService(cfg), new BaritoneNavigator(), new InputController(), new ActionManager(), new UseController()));
+        server.start();
+
+        try (Socket s = connectWs(port)) {
+            s.setSoTimeout(5000);
+            readServerFrame(s.getInputStream()); // welcome
+            sendMasked(s.getOutputStream(), "{\"id\":\"1\",\"cmd\":\"hello\",\"args\":{\"token\":\"read\"}}");
+            String hello = readUntilId(s.getInputStream(), "\"id\":\"1\"");
+            assertTrue(hello.contains("\"scope\":\"read\""), hello);
+
+            sendMasked(s.getOutputStream(), "{\"id\":\"2\",\"cmd\":\"ping\",\"args\":{}}");
+            assertTrue(readUntilId(s.getInputStream(), "\"id\":\"2\"").contains("\"ok\":true"));
+
+            sendMasked(s.getOutputStream(), "{\"id\":\"3\",\"cmd\":\"move\",\"args\":{\"forward\":true}}");
+            String denied = readUntilId(s.getInputStream(), "\"id\":\"3\"");
+            assertTrue(denied.contains("\"ok\":false"), denied);
+            assertTrue(denied.contains("\"UNAUTHORIZED\""), denied);
+        } finally {
+            server.stop();
+        }
+    }
+
+    @Test
+    void nonObjectArgsReturnBadArgs() throws Exception {
+        int port;
+        try (ServerSocket ss = new ServerSocket(0)) {
+            port = ss.getLocalPort();
+        }
+        ClefConfig cfg = new ClefConfig();
+        cfg.control.host = "127.0.0.1";
+        cfg.control.port = port;
+        cfg.control.authToken = "";
+        ControlServer server = new ControlServer(cfg,
+                new ClefServices(new ScreenshotService(cfg), new BaritoneNavigator(), new InputController(), new ActionManager(), new UseController()));
+        server.start();
+        try (Socket s = connectWs(port)) {
+            s.setSoTimeout(5000);
+            sendMasked(s.getOutputStream(), "{\"id\":\"1\",\"cmd\":\"ping\",\"args\":[]}");
+            String resp = readUntilId(s.getInputStream(), "\"id\":\"1\"");
+            assertTrue(resp.contains("\"BAD_ARGS\""), resp);
+        } finally {
+            server.stop();
+        }
+    }
+
+    @Test
+    void commandRateLimitIsPerConnection() throws Exception {
+        int port;
+        try (ServerSocket ss = new ServerSocket(0)) {
+            port = ss.getLocalPort();
+        }
+        ClefConfig cfg = new ClefConfig();
+        cfg.control.host = "127.0.0.1";
+        cfg.control.port = port;
+        cfg.control.authToken = "";
+        cfg.control.rateLimitPerSecond = 0.01;
+        cfg.control.rateLimitBurst = 1;
+        ControlServer server = new ControlServer(cfg,
+                new ClefServices(new ScreenshotService(cfg), new BaritoneNavigator(), new InputController(), new ActionManager(), new UseController()));
+        server.start();
+        try (Socket s = connectWs(port)) {
+            s.setSoTimeout(5000);
+            sendMasked(s.getOutputStream(), "{\"id\":\"1\",\"cmd\":\"ping\",\"args\":{}}");
+            assertTrue(readUntilId(s.getInputStream(), "\"id\":\"1\"").contains("\"ok\":true"));
+            sendMasked(s.getOutputStream(), "{\"id\":\"2\",\"cmd\":\"ping\",\"args\":{}}");
+            String limited = readUntilId(s.getInputStream(), "\"id\":\"2\"");
+            assertTrue(limited.contains("rate limit exceeded"), limited);
+        } finally {
+            server.stop();
+        }
+    }
+
     // ---- minimal WS client helpers --------------------------------------------------
 
     private static Socket connectWs(int port) throws Exception {

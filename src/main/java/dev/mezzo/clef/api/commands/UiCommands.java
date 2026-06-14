@@ -147,9 +147,9 @@ public final class UiCommands {
             return ctx.onMain(() -> {
                 MinecraftClient mc = MinecraftClient.getInstance();
                 Screen sc = mc.currentScreen;
-                if (sc == null) throw new IllegalStateException("no screen open");
+                if (sc == null) throw ApiException.notFound("no screen open");
                 Element e = nth(sc, index);
-                if (!(e instanceof ClickableWidget w)) throw new IllegalStateException("widget " + index + " is not clickable");
+                if (!(e instanceof ClickableWidget w)) throw ApiException.badArgs("widget " + index + " is not clickable");
                 w.mouseClicked(w.getX() + w.getWidth() / 2.0, w.getY() + w.getHeight() / 2.0, 0);
                 JsonObject o = new JsonObject();
                 o.addProperty("clicked", index);
@@ -164,9 +164,9 @@ public final class UiCommands {
             return ctx.onMain(() -> {
                 MinecraftClient mc = MinecraftClient.getInstance();
                 Screen sc = mc.currentScreen;
-                if (sc == null) throw new IllegalStateException("no screen open");
+                if (sc == null) throw ApiException.notFound("no screen open");
                 Element e = nth(sc, index);
-                if (!(e instanceof TextFieldWidget tf)) throw new IllegalStateException("widget " + index + " is not a text field");
+                if (!(e instanceof TextFieldWidget tf)) throw ApiException.badArgs("widget " + index + " is not a text field");
                 tf.setText(text);
                 JsonObject o = new JsonObject();
                 o.addProperty("set", text);
@@ -325,13 +325,13 @@ public final class UiCommands {
             case "throw", "drop" -> SlotActionType.THROW;
             case "pickupall", "double" -> SlotActionType.PICKUP_ALL;
             case "quickcraft" -> SlotActionType.QUICK_CRAFT;
-            default -> SlotActionType.PICKUP;
+            default -> throw ApiException.badArgs("mode must be pickup, quickMove, swap, clone, throw, pickupAll, or quickCraft");
         };
     }
 
     private static Element nth(Screen sc, int index) {
         java.util.List<? extends Element> kids = sc.children();
-        if (index < 0 || index >= kids.size()) throw new IllegalStateException("no widget at index " + index);
+        if (index < 0 || index >= kids.size()) throw ApiException.notFound("no widget at index " + index);
         return kids.get(index);
     }
 

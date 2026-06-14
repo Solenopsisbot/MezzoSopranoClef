@@ -2,10 +2,12 @@ package dev.mezzo.clef.api.commands;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import dev.mezzo.clef.MezzoClef;
 import dev.mezzo.clef.api.ApiException;
 import dev.mezzo.clef.api.ApiSchema;
 import dev.mezzo.clef.api.CommandDispatcher;
 import dev.mezzo.clef.bot.ServerConnector;
+import dev.mezzo.clef.config.ClefConfig;
 import dev.mezzo.clef.headless.HeadlessController;
 import dev.mezzo.clef.nav.Navigator;
 import dev.mezzo.clef.screenshot.ScreenshotService;
@@ -46,6 +48,10 @@ public final class CoreCommands {
                     .ifPresent(cpu -> o.addProperty("cpuMs", cpu.toMillis()));
             o.addProperty("soundsSuppressed", hc.soundsSuppressed());
             o.addProperty("skippedFrames", hc.skippedFrames());
+            o.addProperty("commandsHandled", ctx.server.commandsHandled());
+            o.addProperty("commandsFailed", ctx.server.commandsFailed());
+            long handled = Math.max(1, ctx.server.commandsHandled());
+            o.addProperty("commandAvgMs", (ctx.server.commandTotalNanos() / 1_000_000.0) / handled);
             o.addProperty("disableSound", hc.isDisableSound());
             o.addProperty("noGl", hc.isNoGl());
             o.addProperty("muteAudio", hc.isMuteAudio());
@@ -142,6 +148,16 @@ public final class CoreCommands {
             return o;
         }));
 
+        d.register("control.rotateToken", "rotate the full-control WebSocket token and persist config", ctx -> {
+            String token = ClefConfig.generateAuthToken();
+            MezzoClef.config().control.authToken = token;
+            MezzoClef.config().save(MezzoClef.configPath());
+            JsonObject o = new JsonObject();
+            o.addProperty("rotated", true);
+            o.addProperty("authToken", token);
+            return o;
+        });
+
         d.register("connect", "join a server {host, port}", ctx -> {
             String host = ctx.requireStr("host");
             int port = ctx.i("port", 25565);
@@ -234,6 +250,13 @@ public final class CoreCommands {
                     o.addProperty("format", "png");
                     o.addProperty("backend", ctx.server.services.screenshots.backend());
                     o.addProperty("bytes", png.length);
+                    ScreenshotService.CaptureMetrics m = ctx.server.services.screenshots.lastMetrics();
+                    if (m != null) {
+                        o.addProperty("durationMs", m.totalMs());
+                        o.addProperty("snapshotMs", m.snapshotMs());
+                        o.addProperty("renderMs", m.renderMs());
+                        o.addProperty("pngMs", m.pngMs());
+                    }
                     o.addProperty("base64", Base64.getEncoder().encodeToString(png));
                     return o;
                 });

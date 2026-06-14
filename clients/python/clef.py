@@ -35,6 +35,7 @@ import os
 import socket
 import struct
 import sys
+import time
 from collections import deque
 from typing import Any, Deque, Dict, Iterator, List, Optional, Tuple
 
@@ -122,6 +123,31 @@ class ClefClient:
         if self.token:
             self.hello(self.token)
         return self
+
+    def connect_retry(
+        self,
+        attempts: int = 30,
+        initial_delay: float = 0.5,
+        max_delay: float = 5.0,
+    ) -> "ClefClient":
+        """Connect with exponential backoff. Useful when launching beside a bot process."""
+        last: Optional[BaseException] = None
+        delay = initial_delay
+        for _ in range(max(1, attempts)):
+            try:
+                return self.connect()
+            except (OSError, ConnectionError, ClefError) as e:
+                last = e
+                self.close()
+                time.sleep(delay)
+                delay = min(max_delay, delay * 2)
+        raise ConnectionError(f"could not connect after {attempts} attempts: {last}")
+
+    def reconnect(self, **retry_opts: Any) -> "ClefClient":
+        """Close the current socket and reconnect, preserving host/port/token settings."""
+        self.close()
+        self._events.clear()
+        return self.connect_retry(**retry_opts)
 
     def hello(self, token: str) -> Dict[str, Any]:
         """Authenticate this connection."""

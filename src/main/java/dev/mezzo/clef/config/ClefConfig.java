@@ -83,12 +83,20 @@ public final class ClefConfig {
          * random token so browser pages cannot silently drive a local bot. Empty disables auth.
          */
         public String authToken = "";
+        /** Optional lower-privilege token: can read status/schema/events/screenshots but cannot drive the bot. */
+        public String readOnlyAuthToken = "";
         /**
          * Comma-separated browser origins allowed to open the WebSocket, in addition to the
          * built-in dashboard origin when enabled. CLI/script clients usually send no Origin and
          * are still accepted.
          */
         public String allowedOrigins = "";
+        /** Per-connection command rate limit. Set <=0 to disable. */
+        public double rateLimitPerSecond = 20.0;
+        /** Per-connection burst capacity for the rate limiter. */
+        public int rateLimitBurst = 40;
+        /** Log command audit lines (duration, scope, result code; never token values). */
+        public boolean auditLog = true;
         /** Serve a built-in browser dashboard (static page that talks to the control plane). */
         public boolean dashboard = false;
         public int dashboardPort = 8732;
@@ -113,6 +121,8 @@ public final class ClefConfig {
          *  see further but each capture reads ~(2r)^3 blocks on the client thread, so keep it
          *  modest for frequent captures. */
         public int maxRayDistance = 64;
+        /** software backend: hard cap on the block snapshot volume read on the client thread. */
+        public int maxSnapshotBlocks = 8_000_000;
         /** software backend: max nearby entities (players/mobs/items) drawn per capture. */
         public int maxEntities = 64;
     }
@@ -167,8 +177,16 @@ public final class ClefConfig {
         if (wsPort != null) try { control.port = Integer.parseInt(wsPort); } catch (NumberFormatException ignored) {}
         String wsToken = System.getProperty("mezzoclef.ws.token");
         if (wsToken != null) control.authToken = wsToken;
+        String wsReadToken = System.getProperty("mezzoclef.ws.readOnlyToken");
+        if (wsReadToken != null) control.readOnlyAuthToken = wsReadToken;
         String wsOrigins = System.getProperty("mezzoclef.ws.allowedOrigins");
         if (wsOrigins != null) control.allowedOrigins = wsOrigins;
+        String wsRate = System.getProperty("mezzoclef.ws.rateLimitPerSecond");
+        if (wsRate != null) try { control.rateLimitPerSecond = Double.parseDouble(wsRate); } catch (NumberFormatException ignored) {}
+        String wsBurst = System.getProperty("mezzoclef.ws.rateLimitBurst");
+        if (wsBurst != null) try { control.rateLimitBurst = Integer.parseInt(wsBurst); } catch (NumberFormatException ignored) {}
+        String audit = System.getProperty("mezzoclef.ws.auditLog");
+        if (audit != null) control.auditLog = Boolean.parseBoolean(audit);
 
         String dash = System.getProperty("mezzoclef.dashboard");
         if (dash != null) control.dashboard = Boolean.parseBoolean(dash);
@@ -193,7 +211,7 @@ public final class ClefConfig {
         if (sb != null) screenshot.backend = sb;
     }
 
-    private static String generateAuthToken() {
+    public static String generateAuthToken() {
         byte[] bytes = new byte[24];
         new SecureRandom().nextBytes(bytes);
         return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);

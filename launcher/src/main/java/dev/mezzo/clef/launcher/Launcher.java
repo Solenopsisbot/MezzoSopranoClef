@@ -15,8 +15,10 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.security.MessageDigest;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -151,11 +153,12 @@ public final class Launcher {
     private Path downloadClientJar(JsonObject versionJson) throws IOException, InterruptedException {
         JsonObject client = versionJson.getAsJsonObject("downloads").getAsJsonObject("client");
         Path out = libDir.resolve("minecraft-" + mcVersion + "-client.jar");
-        download(client.get("url").getAsString(), out, client.get("size").getAsLong());
+        download(client.get("url").getAsString(), out, client.get("size").getAsLong(),
+                client.get("sha1").getAsString());
         return out;
     }
 
-    private record LibSpec(String url, String path, long size) {}
+    private record LibSpec(String url, String path, long size, String sha1) {}
 
     private void collectVanillaLibraries(JsonObject versionJson, Map<String, LibSpec> out) {
         for (JsonElement e : versionJson.getAsJsonArray("libraries")) {
@@ -166,7 +169,8 @@ public final class Launcher {
             if (!downloads.has("artifact")) continue;
             JsonObject art = downloads.getAsJsonObject("artifact");
             out.put(libKey(lib.get("name").getAsString()),
-                    new LibSpec(art.get("url").getAsString(), art.get("path").getAsString(), art.get("size").getAsLong()));
+                    new LibSpec(art.get("url").getAsString(), art.get("path").getAsString(),
+                            art.get("size").getAsLong(), art.get("sha1").getAsString()));
         }
     }
 
@@ -175,7 +179,7 @@ public final class Launcher {
         log("Downloading " + libs.size() + " libraries (Minecraft + Fabric, de-duplicated)…");
         for (LibSpec spec : libs.values()) {
             Path out = libDir.resolve("libraries").resolve(spec.path());
-            download(spec.url(), out, spec.size());
+            download(spec.url(), out, spec.size(), spec.sha1());
             jars.add(out);
         }
         return jars;
@@ -195,7 +199,8 @@ public final class Launcher {
         JsonObject assetIndex = versionJson.getAsJsonObject("assetIndex");
         String id = assetIndex.get("id").getAsString();
         Path indexFile = assetsDir.resolve("indexes").resolve(id + ".json");
-        download(assetIndex.get("url").getAsString(), indexFile, assetIndex.get("size").getAsLong());
+        download(assetIndex.get("url").getAsString(), indexFile, assetIndex.get("size").getAsLong(),
+                assetIndex.get("sha1").getAsString());
 
         JsonObject objects = JsonParser.parseString(Files.readString(indexFile))
                 .getAsJsonObject().getAsJsonObject("objects");
@@ -221,7 +226,7 @@ public final class Launcher {
             Path out = objectsDir.resolve(sub).resolve(hash);
             futures.add(pool.submit(() -> {
                 try {
-                    download(RESOURCES_BASE + sub + "/" + hash, out, size);
+                    download(RESOURCES_BASE + sub + "/" + hash, out, size, hash);
                     int n = done.incrementAndGet();
                     if (n % 250 == 0) log("  assets: " + n + " downloaded");
                 } catch (Exception ex) {
@@ -244,7 +249,7 @@ public final class Launcher {
             String base = lib.has("url") ? lib.get("url").getAsString() : "https://maven.fabricmc.net/";
             if (!base.endsWith("/")) base += "/";
             String path = mavenPath(name);
-            out.put(libKey(name), new LibSpec(base + path, path, -1)); // Fabric overrides Minecraft
+            out.put(libKey(name), new LibSpec(base + path, path, -1, null)); // Fabric overrides Minecraft
         }
     }
 
@@ -347,9 +352,11 @@ public final class Launcher {
         return JsonParser.parseString(resp.body()).getAsJsonObject();
     }
 
-    /** Download to {@code out} unless it already exists with the expected size (size < 0 = unknown). */
-    private void download(String url, Path out, long expectedSize) throws IOException, InterruptedException {
-        if (Files.exists(out) && (expectedSize < 0 || Files.size(out) == expectedSize)) return;
+    /** Download to {@code out} unless it already exists with the expected size/hash. */
+    private void download(String url, Path out, long expectedSize, String expectedSha1)
+            throws IOException, InterruptedException {
+        String sha1 = expectedSha1 != null && !expectedSha1.isBlank() ? expectedSha1 : fetchSha1(url);
+        if (Files.exists(out) && fileMatches(out, expectedSize, sha1)) return;
         Files.createDirectories(out.getParent());
         IOException last = null;
         for (int attempt = 1; attempt <= 3; attempt++) {
@@ -358,6 +365,10 @@ public final class Launcher {
                 Path tmp = out.resolveSibling(out.getFileName() + ".part");
                 HttpResponse<Path> resp = HTTP.send(req, HttpResponse.BodyHandlers.ofFile(tmp));
                 if (resp.statusCode() != 200) throw new IOException("HTTP " + resp.statusCode() + " for " + url);
+                if (!fileMatches(tmp, expectedSize, sha1)) {
+                    Files.deleteIfExists(tmp);
+                    throw new IOException("checksum/size mismatch for " + url);
+                }
                 Files.move(tmp, out, StandardCopyOption.REPLACE_EXISTING);
                 return;
             } catch (IOException ex) {
@@ -366,6 +377,40 @@ public final class Launcher {
             }
         }
         throw new IOException("Failed to download " + url, last);
+    }
+
+    private static boolean fileMatches(Path file, long expectedSize, String expectedSha1) throws IOException {
+        if (expectedSize >= 0 && Files.size(file) != expectedSize) return false;
+        return expectedSha1 == null || expectedSha1.isBlank() || sha1(file).equalsIgnoreCase(expectedSha1);
+    }
+
+    private String fetchSha1(String url) throws IOException, InterruptedException {
+        HttpRequest req = HttpRequest.newBuilder(URI.create(url + ".sha1"))
+                .GET().timeout(Duration.ofSeconds(60)).build();
+        HttpResponse<String> resp = HTTP.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        if (resp.statusCode() != 200) {
+            throw new IOException("GET " + url + ".sha1 -> HTTP " + resp.statusCode());
+        }
+        String body = resp.body() == null ? "" : resp.body().trim();
+        String hash = body.split("\\s+")[0];
+        if (!hash.matches("(?i)[0-9a-f]{40}")) {
+            throw new IOException("invalid SHA-1 from " + url + ".sha1");
+        }
+        return hash;
+    }
+
+    private static String sha1(Path path) throws IOException {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-1");
+            try (InputStream in = Files.newInputStream(path)) {
+                byte[] buf = new byte[64 * 1024];
+                int n;
+                while ((n = in.read(buf)) != -1) md.update(buf, 0, n);
+            }
+            return HexFormat.of().formatHex(md.digest());
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-1 not available", e);
+        }
     }
 
     private static String currentOsName() {

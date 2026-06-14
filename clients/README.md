@@ -36,6 +36,9 @@ with ClefClient(token="...") as bot:          # connect + auth; token also read 
 
 Smoke test against a running bot: `python3 clef.py status`.
 
+If your script starts the bot process and immediately connects, use `connect_retry()` (or
+`reconnect()`) to wait through startup without writing your own backoff loop.
+
 ## TypeScript / JavaScript
 
 Node ≥ 22 and browsers have a global `WebSocket`. On older Node, set one first:
@@ -45,7 +48,7 @@ Node ≥ 22 and browsers have a global `WebSocket`. On older Node, set one first
 import { ClefClient, ClefError } from "./clef.ts";
 
 const bot = new ClefClient({ host: "127.0.0.1", port: 8731, token: "..." });
-await bot.connect();
+await bot.connectRetry();
 await bot.connectServer("play.example.com");
 
 bot.on("chat", (d) => console.log("chat:", d.text));

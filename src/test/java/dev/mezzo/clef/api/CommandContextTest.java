@@ -56,4 +56,15 @@ class CommandContextTest {
         assertEquals("def", c.str("missing", "def"));
         assertFalse(c.has("missing"));
     }
+
+    @Test
+    void optionalReadersThrowBadArgsWhenMistyped() {
+        JsonObject a = new JsonObject();
+        a.addProperty("n", "not-a-number");
+        a.addProperty("b", "not-a-bool");
+        assertEquals(ErrorCode.BAD_ARGS, assertThrows(ApiException.class, () -> ctx(a).i("n", 0)).code);
+        assertEquals(ErrorCode.BAD_ARGS, assertThrows(ApiException.class, () -> ctx(a).d("n", 0)).code);
+        assertEquals(ErrorCode.BAD_ARGS, assertThrows(ApiException.class, () -> ctx(a).f("n", 0)).code);
+        assertEquals(ErrorCode.BAD_ARGS, assertThrows(ApiException.class, () -> ctx(a).bool("b", false)).code);
+    }
 }

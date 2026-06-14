@@ -16,6 +16,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.LinkedHashSet;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * The control plane. Speaks a tiny JSON protocol over WebSocket:
@@ -35,8 +36,15 @@ public final class ControlServer implements WsServer.Listener {
     private final WsServer ws;
     private final CommandDispatcher dispatcher = new CommandDispatcher();
     private final Gson gson = new Gson();
-    private final boolean requireAuth;
     private DashboardServer dashboard;
+    private final AtomicLong commandsHandled = new AtomicLong();
+    private final AtomicLong commandsFailed = new AtomicLong();
+    private final AtomicLong commandTotalNanos = new AtomicLong();
+
+    private static final Set<String> READ_ONLY_COMMANDS = Set.of(
+            "ping", "help", "schema", "stats", "subscribe", "unsubscribe", "events",
+            "status", "auth.status", "players", "screenshot", "nav.status",
+            "inventory", "entities", "blockAt", "container", "screen", "serverui", "findItem");
 
     /** Shared service handles (screenshots, navigation) reachable from any command. */
     public final ClefServices services;
@@ -44,7 +52,6 @@ public final class ControlServer implements WsServer.Listener {
     public ControlServer(ClefConfig config, ClefServices services) {
         this.config = config;
         this.services = services;
-        this.requireAuth = config.control.authToken != null && !config.control.authToken.isBlank();
         this.ws = new WsServer(config.control.host, config.control.port, this, allowedOrigins(config));
     }
 
@@ -78,6 +85,18 @@ public final class ControlServer implements WsServer.Listener {
         return ws.connectionCount();
     }
 
+    public long commandsHandled() {
+        return commandsHandled.get();
+    }
+
+    public long commandsFailed() {
+        return commandsFailed.get();
+    }
+
+    public long commandTotalNanos() {
+        return commandTotalNanos.get();
+    }
+
     // ---- protocol -------------------------------------------------------------------
 
     @Override
@@ -85,7 +104,7 @@ public final class ControlServer implements WsServer.Listener {
         JsonObject data = new JsonObject();
         data.addProperty("server", "MezzoSopranoClef");
         data.addProperty("protocol", ApiSchema.PROTOCOL_VERSION);
-        data.addProperty("requiresAuth", requireAuth);
+        data.addProperty("requiresAuth", requiresAuth());
         sendEvent(conn, "welcome", data);
     }
 
@@ -99,8 +118,19 @@ public final class ControlServer implements WsServer.Listener {
             return;
         }
 
-        String id = req.has("id") && !req.get("id").isJsonNull() ? req.get("id").getAsString() : null;
-        String cmd = req.has("cmd") && !req.get("cmd").isJsonNull() ? req.get("cmd").getAsString() : null;
+        String id;
+        String cmd;
+        try {
+            id = req.has("id") && !req.get("id").isJsonNull() ? req.get("id").getAsString() : null;
+            cmd = req.has("cmd") && !req.get("cmd").isJsonNull() ? req.get("cmd").getAsString() : null;
+        } catch (RuntimeException e) {
+            sendError(conn, null, ErrorCode.BAD_ARGS, "'id' and 'cmd' must be strings");
+            return;
+        }
+        if (req.has("args") && !req.get("args").isJsonNull() && !req.get("args").isJsonObject()) {
+            sendError(conn, id, ErrorCode.BAD_ARGS, "'args' must be an object");
+            return;
+        }
         JsonObject args = req.has("args") && req.get("args").isJsonObject()
                 ? req.getAsJsonObject("args") : new JsonObject();
 
@@ -110,12 +140,26 @@ public final class ControlServer implements WsServer.Listener {
         }
 
         if (cmd.equals("hello")) {
-            boolean ok = !requireAuth
-                    || tokenEquals(config.control.authToken, args.has("token") ? args.get("token").getAsString() : "");
+            String token;
+            try {
+                if (args.has("token") && !args.get("token").isJsonNull()
+                        && (!args.get("token").isJsonPrimitive() || !args.getAsJsonPrimitive("token").isString())) {
+                    throw new IllegalArgumentException("token must be string");
+                }
+                token = args.has("token") && !args.get("token").isJsonNull()
+                        ? args.get("token").getAsString() : "";
+            } catch (RuntimeException e) {
+                sendError(conn, id, ErrorCode.BAD_ARGS, "arg 'token' must be string");
+                return;
+            }
+            String scope = tokenScope(token);
+            boolean ok = !requiresAuth() || scope != null;
             conn.attributes.put("authed", ok);
             if (ok) {
+                conn.attributes.put("scope", scope == null ? "full" : scope);
                 JsonObject r = new JsonObject();
                 r.addProperty("authed", true);
+                r.addProperty("scope", scope == null ? "full" : scope);
                 r.addProperty("protocol", ApiSchema.PROTOCOL_VERSION);
                 sendResult(conn, id, r);
             } else {
@@ -124,15 +168,27 @@ public final class ControlServer implements WsServer.Listener {
             return;
         }
 
-        if (requireAuth && !Boolean.TRUE.equals(conn.attributes.get("authed"))) {
+        if (requiresAuth() && !Boolean.TRUE.equals(conn.attributes.get("authed"))) {
             sendError(conn, id, ErrorCode.UNAUTHORIZED, "unauthorized — send {cmd:'hello',args:{token:'...'}} first");
             return;
         }
+        if (!allowByScope(conn, cmd)) {
+            sendError(conn, id, ErrorCode.UNAUTHORIZED, "read-only token cannot run command: " + cmd);
+            return;
+        }
+        if (!rateAllowed(conn)) {
+            sendError(conn, id, ErrorCode.RATE_LIMIT, "rate limit exceeded");
+            return;
+        }
 
+        long start = System.nanoTime();
+        ErrorCode auditCode = null;
         try {
+            ApiSchema.validateArgs(cmd, args);
             CommandContext ctx = new CommandContext(this, conn, args);
             JsonElement result = dispatcher.dispatch(cmd, ctx);
             sendResult(conn, id, result == null ? JsonNull.INSTANCE : result);
+            auditCode = null;
         } catch (Exception e) {
             MezzoClef.LOG.debug("command '{}' failed", cmd, e);
             // Recover a machine-readable code from anywhere in the cause chain (onMain re-wraps).
@@ -141,6 +197,13 @@ public final class ControlServer implements WsServer.Listener {
             String msg = coded != null ? coded.getMessage()
                     : (e.getMessage() == null ? e.toString() : e.getMessage());
             sendError(conn, id, code, msg);
+            auditCode = code;
+        } finally {
+            long elapsed = System.nanoTime() - start;
+            commandsHandled.incrementAndGet();
+            commandTotalNanos.addAndGet(elapsed);
+            if (auditCode != null) commandsFailed.incrementAndGet();
+            audit(conn, cmd, auditCode, elapsed);
         }
     }
 
@@ -232,7 +295,42 @@ public final class ControlServer implements WsServer.Listener {
     }
 
     private boolean isAuthed(WsConnection conn) {
-        return !requireAuth || Boolean.TRUE.equals(conn.attributes.get("authed"));
+        return !requiresAuth() || Boolean.TRUE.equals(conn.attributes.get("authed"));
+    }
+
+    private boolean allowByScope(WsConnection conn, String cmd) {
+        Object scope = conn.attributes.get("scope");
+        return !"read".equals(scope) || READ_ONLY_COMMANDS.contains(cmd);
+    }
+
+    private boolean rateAllowed(WsConnection conn) {
+        if (config.control.rateLimitPerSecond <= 0 || config.control.rateLimitBurst <= 0) return true;
+        TokenBucket bucket = (TokenBucket) conn.attributes.computeIfAbsent("rateBucket",
+                ignored -> new TokenBucket(config.control.rateLimitPerSecond, config.control.rateLimitBurst));
+        return bucket.take();
+    }
+
+    private void audit(WsConnection conn, String cmd, ErrorCode code, long elapsedNanos) {
+        if (!config.control.auditLog) return;
+        String result = code == null ? "OK" : code.name();
+        MezzoClef.LOG.info("control command conn={} scope={} cmd={} result={} durationMs={}",
+                conn.id(), conn.attributes.getOrDefault("scope", requiresAuth() ? "unauthenticated" : "full"),
+                cmd, result, elapsedNanos / 1_000_000.0);
+    }
+
+    private String tokenScope(String actual) {
+        if (!requiresAuth()) return "full";
+        if (hasToken(config.control.authToken) && tokenEquals(config.control.authToken, actual)) return "full";
+        if (hasToken(config.control.readOnlyAuthToken) && tokenEquals(config.control.readOnlyAuthToken, actual)) return "read";
+        return null;
+    }
+
+    private boolean requiresAuth() {
+        return hasToken(config.control.authToken) || hasToken(config.control.readOnlyAuthToken);
+    }
+
+    private static boolean hasToken(String token) {
+        return token != null && !token.isBlank();
     }
 
     private static boolean tokenEquals(String expected, String actual) {
@@ -241,6 +339,29 @@ public final class ControlServer implements WsServer.Listener {
         return MessageDigest.isEqual(
                 expected.getBytes(StandardCharsets.UTF_8),
                 actual.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static final class TokenBucket {
+        private final double refillPerSecond;
+        private final double burst;
+        private double tokens;
+        private long lastNanos = System.nanoTime();
+
+        TokenBucket(double refillPerSecond, int burst) {
+            this.refillPerSecond = refillPerSecond;
+            this.burst = burst;
+            this.tokens = burst;
+        }
+
+        synchronized boolean take() {
+            long now = System.nanoTime();
+            double elapsedSeconds = (now - lastNanos) / 1_000_000_000.0;
+            lastNanos = now;
+            tokens = Math.min(burst, tokens + elapsedSeconds * refillPerSecond);
+            if (tokens < 1.0) return false;
+            tokens -= 1.0;
+            return true;
+        }
     }
 
     private static Set<String> allowedOrigins(ClefConfig config) {

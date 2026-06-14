@@ -62,9 +62,9 @@ client and:
   We keep the sound engine intact because tearing it down can crash gameplay sounds.
 - **Screenshot on demand, GPU-free** — the default `software` backend is a CPU voxel raycaster
   (`SoftwareRaycaster`): it snapshots the loaded world's blocks and rasterizes from any camera at
-  any resolution, on the CPU, then PNG-encodes via ImageIO. **No GL context, no GPU, no window** —
-  runs on any headless host and is fully unit-tested. An optional `gl` backend renders through the
-  real client renderer for vanilla fidelity when a GL context is available.
+  any resolution, on the CPU, then PNG-encodes with the pure-Java `PngEncoder`. **No GL context,
+  no GPU, no window** — runs on any headless host and is fully unit-tested. An optional `gl`
+  backend renders through the real client renderer for vanilla fidelity when a GL context is available.
 
 ---
 
@@ -340,7 +340,11 @@ First run writes `config/mezzoclef.json`. Anything can be overridden by a `-Dmez
     "host": "127.0.0.1",
     "port": 8731,
     "authToken": "<generated>",        // required by default; send via the hello command
+    "readOnlyAuthToken": "",           // optional token for status/schema/events/screenshots only
     "allowedOrigins": "",              // comma-separated extra browser origins for WebSocket
+    "rateLimitPerSecond": 20.0,         // per-connection command rate limit (<=0 disables)
+    "rateLimitBurst": 40,
+    "auditLog": true,                   // log command, scope, result and duration (never tokens)
     "dashboard": false,                // serve the built-in browser dashboard
     "dashboardPort": 8732
   },
@@ -350,6 +354,7 @@ First run writes `config/mezzoclef.json`. Anything can be overridden by a `-Dmez
     "maxWidth": 3840, "maxHeight": 2160,
     "maxPixels": 8294400,
     "maxRayDistance": 64,              // software: capture cube half-size + max ray length (blocks)
+    "maxSnapshotBlocks": 8000000,      // software: cap block reads on the client thread
     "maxEntities": 64                  // software: max nearby entities drawn per capture
   },
   "headless": true,
@@ -362,7 +367,8 @@ First run writes `config/mezzoclef.json`. Anything can be overridden by a `-Dmez
 Handy overrides: `-Dmezzoclef.headless=false`, `-Dmezzoclef.ws.port=9000`,
 `-Dmezzoclef.auth.mode=microsoft`, `-Dmezzoclef.auth.username=Steve`,
 `-Dmezzoclef.connect.auto=true`, `-Dmezzoclef.connect.host=...`, `-Dmezzoclef.screenshot.backend=gl`,
-`-Dmezzoclef.nogl=false` (boot with real OpenGL), `-Dmezzoclef.window=none` (force the no-display GLFW null platform).
+`-Dmezzoclef.nogl=false` (boot with real OpenGL), `-Dmezzoclef.window=none` (force the no-display GLFW null platform),
+`-Dmezzoclef.ws.readOnlyToken=...`, `-Dmezzoclef.ws.rateLimitPerSecond=...`.
 
 ---
 
@@ -420,6 +426,17 @@ New configs generate `control.authToken` automatically. Send
 Python probes. Browser WebSocket origins are rejected unless they come from the built-in dashboard
 or from `control.allowedOrigins`.
 
+For observers and dashboards that should not move or mutate the bot, set `control.readOnlyAuthToken`.
+Read-only connections can call status/schema/events/screenshot-style commands, but mutating commands
+such as `move`, `mine`, `chat`, `connect`, and `clickSlot` return `UNAUTHORIZED`.
+
+To rotate the full-control token without restarting, call `control.rotateToken` from a full-scope
+connection. The new token is returned once and persisted to `config/mezzoclef.json`.
+
+For remote access, prefer an SSH tunnel or a TLS reverse proxy in front of the WebSocket. Keep the
+bot bound to `127.0.0.1` unless you intentionally expose it, and never disable tokens on a network
+you do not fully control.
+
 ### Self-describing contract (`schema`) + versioning
 
 The control plane is designed to be driven by other programs without scraping this README. Two
@@ -463,6 +480,7 @@ response's `errors` array:
 | `NOT_IN_WORLD` | the bot is not in a world yet (title screen / not spawned) |
 | `NOT_CONNECTED` | the bot is not connected to a server |
 | `NOT_FOUND` | a named target (entity / item / slot / widget) was not found |
+| `RATE_LIMIT` | too many commands were sent too quickly |
 | `COMMAND_FAILED` | catch-all for an otherwise-uncoded failure |
 
 Required arguments are validated: a command listed below with non-`?` args (e.g. `mine` needs

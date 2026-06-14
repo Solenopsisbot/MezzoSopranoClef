@@ -1,9 +1,11 @@
 package dev.mezzo.clef.api;
 
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeSet;
@@ -39,7 +41,7 @@ public final class ApiSchema {
         }
     }
 
-    private record Arg(String name, Type type, boolean required, String def) {}
+    public record ArgSpec(String name, Type type, boolean required, String def) {}
 
     private record Field(String name, Type type, boolean required) {}
 
@@ -47,14 +49,14 @@ public final class ApiSchema {
 
     private static final class C {
         final String name;
-        final List<Arg> args = new ArrayList<>();
+        final List<ArgSpec> args = new ArrayList<>();
         String result = "";
 
         C(String name) { this.name = name; }
 
-        C req(String n, Type t) { args.add(new Arg(n, t, true, null)); return this; }
-        C opt(String n, Type t) { args.add(new Arg(n, t, false, null)); return this; }
-        C opt(String n, Type t, String def) { args.add(new Arg(n, t, false, def)); return this; }
+        C req(String n, Type t) { args.add(new ArgSpec(n, t, true, null)); return this; }
+        C opt(String n, Type t) { args.add(new ArgSpec(n, t, false, null)); return this; }
+        C opt(String n, Type t, String def) { args.add(new ArgSpec(n, t, false, def)); return this; }
         C result(String r) { this.result = r; return this; }
     }
 
@@ -79,13 +81,14 @@ public final class ApiSchema {
             c("ping").result("{pong,time}"),
             c("help").result("{<command>:<summary>,...}"),
             c("schema").result("{protocol,server,auth,envelope,commands,events,errors}"),
-            c("stats").result("{uptimeMs,cpuMs?,soundsSuppressed,skippedFrames,disableSound,noGl,muteAudio}"),
+            c("stats").result("{uptimeMs,cpuMs?,soundsSuppressed,skippedFrames,commandsHandled,commandsFailed,commandAvgMs,disableSound,noGl,muteAudio}"),
             c("optimize").opt("sound", Type.BOOL).result("{disableSound}"),
             c("subscribe").opt("events", Type.STRING_ARRAY).result("{subscribed:[...]}"),
             c("unsubscribe").result("{unsubscribed}"),
             c("events").result("{events:{<name>:<desc>},subscribeAll}"),
             c("status").result("{headless,noGl,noWindow,inWorld,player?{...},server?,nav*,screenshotBackend,...}"),
             c("auth.status").result("{username,uuid,type}"),
+            c("control.rotateToken").result("{rotated,authToken}"),
             c("connect").req("host", Type.STRING).opt("port", Type.INT, "25565").result("{connecting,host,port}"),
             c("disconnect").result("{disconnected}"),
             c("chat").req("message", Type.STRING).result("{sent}"),
@@ -96,7 +99,7 @@ public final class ApiSchema {
                     .opt("x", Type.DOUBLE).opt("y", Type.DOUBLE).opt("z", Type.DOUBLE)
                     .opt("yaw", Type.FLOAT).opt("pitch", Type.FLOAT)
                     .opt("width", Type.INT).opt("height", Type.INT).opt("fov", Type.FLOAT)
-                    .result("{format,backend,bytes,base64}"),
+                    .result("{format,backend,bytes,durationMs,snapshotMs,renderMs,pngMs,base64}"),
 
             // --- navigation (Baritone) ---
             c("goto").req("x", Type.INT).req("z", Type.INT).opt("y", Type.INT).result("{pathing,backend}"),
@@ -214,7 +217,7 @@ public final class ApiSchema {
             jc.addProperty("name", cmd.name);
             jc.addProperty("summary", help == null ? "" : help.getOrDefault(cmd.name, ""));
             JsonArray ja = new JsonArray();
-            for (Arg a : cmd.args) {
+            for (ArgSpec a : cmd.args) {
                 JsonObject jo = new JsonObject();
                 jo.addProperty("name", a.name);
                 jo.addProperty("type", a.type.wire());
@@ -272,6 +275,65 @@ public final class ApiSchema {
         TreeSet<String> names = new TreeSet<>();
         for (C cmd : COMMANDS) names.add(cmd.name);
         return names;
+    }
+
+    public static Map<String, List<ArgSpec>> commandArgs() {
+        Map<String, List<ArgSpec>> out = new LinkedHashMap<>();
+        for (C cmd : COMMANDS) out.put(cmd.name, List.copyOf(cmd.args));
+        return out;
+    }
+
+    public static void validateArgs(String command, JsonObject args) {
+        List<ArgSpec> specs = commandArgs().get(command);
+        if (specs == null) return; // dispatcher will return UNKNOWN_COMMAND.
+        JsonObject safeArgs = args == null ? new JsonObject() : args;
+        for (ArgSpec spec : specs) {
+            JsonElement value = safeArgs.get(spec.name());
+            if (value == null || value.isJsonNull()) {
+                if (spec.required()) throw ApiException.badArgs("missing required arg: " + spec.name());
+                continue;
+            }
+            if (!matchesType(value, spec.type())) {
+                throw ApiException.badArgs("arg '" + spec.name() + "' must be " + spec.type().wire());
+            }
+        }
+    }
+
+    private static boolean matchesType(JsonElement value, Type type) {
+        if (type == Type.STRING_ARRAY) {
+            if (!value.isJsonArray()) return false;
+            for (JsonElement e : value.getAsJsonArray()) {
+                if (!isString(e)) return false;
+            }
+            return true;
+        }
+        if (!value.isJsonPrimitive()) return false;
+        return switch (type) {
+            case INT, LONG -> isIntegral(value);
+            case DOUBLE, FLOAT -> isNumber(value);
+            case BOOL -> value.getAsJsonPrimitive().isBoolean();
+            case STRING -> isString(value);
+            case STRING_ARRAY -> false;
+        };
+    }
+
+    private static boolean isString(JsonElement value) {
+        return value.isJsonPrimitive() && value.getAsJsonPrimitive().isString();
+    }
+
+    private static boolean isNumber(JsonElement value) {
+        return value.isJsonPrimitive() && value.getAsJsonPrimitive().isNumber();
+    }
+
+    private static boolean isIntegral(JsonElement value) {
+        if (!isNumber(value)) return false;
+        try {
+            value.getAsLong();
+            double d = value.getAsDouble();
+            return Double.isFinite(d) && d == Math.rint(d);
+        } catch (RuntimeException e) {
+            return false;
+        }
     }
 
     private ApiSchema() {}

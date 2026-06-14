@@ -1,0 +1,38 @@
+name: Live E2E
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 9 * * *"
+
+jobs:
+  live:
+    name: Real Minecraft server smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Run live e2e
+        env:
+          MC_VERSION: "1.21.8"
+          WS_PORT: "8731"
+          BOT_NAME: "ClefBot"
+        run: scripts/e2e.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: live-e2e-artifacts
+          path: |
+            e2e/*.log
+            e2e/*.png
+            e2e/*.out
+            e2e/server/server.log
+          if-no-files-found: ignore

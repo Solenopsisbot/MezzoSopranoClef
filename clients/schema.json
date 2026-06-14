@@ -33,7 +33,7 @@
       "name": "stats",
       "summary": "runtime perf counters: process CPU time, suppressed sound work, skipped frames",
       "args": [],
-      "result": "{uptimeMs,cpuMs?,soundsSuppressed,skippedFrames,disableSound,noGl,muteAudio}"
+      "result": "{uptimeMs,cpuMs?,soundsSuppressed,skippedFrames,commandsHandled,commandsFailed,commandAvgMs,disableSound,noGl,muteAudio}"
     },
     {
       "name": "optimize",
@@ -82,6 +82,12 @@
       "summary": "current logged-in identity",
       "args": [],
       "result": "{username,uuid,type}"
+    },
+    {
+      "name": "control.rotateToken",
+      "summary": "rotate the full-control WebSocket token and persist config",
+      "args": [],
+      "result": "{rotated,authToken}"
     },
     {
       "name": "connect",
@@ -199,7 +205,7 @@
           "required": false
         }
       ],
-      "result": "{format,backend,bytes,base64}"
+      "result": "{format,backend,bytes,durationMs,snapshotMs,renderMs,pngMs,base64}"
     },
     {
       "name": "goto",
@@ -1010,6 +1016,10 @@
     {
       "code": "NOT_FOUND",
       "meaning": "the requested target was not found"
+    },
+    {
+      "code": "RATE_LIMIT",
+      "meaning": "too many commands were sent too quickly"
     },
     {
       "code": "COMMAND_FAILED",

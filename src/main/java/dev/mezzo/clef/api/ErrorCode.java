@@ -27,6 +27,8 @@ public enum ErrorCode {
     NOT_CONNECTED("the bot is not connected to a server"),
     /** A named target (entity / item / slot / widget) could not be found. */
     NOT_FOUND("the requested target was not found"),
+    /** The client exceeded the configured per-connection command rate. */
+    RATE_LIMIT("too many commands were sent too quickly"),
     /** Catch-all: the command threw an error that has no more specific code. */
     COMMAND_FAILED("the command failed with an unexpected error");
 

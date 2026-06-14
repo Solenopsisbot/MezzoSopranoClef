@@ -99,6 +99,26 @@ class ApiSchemaTest {
                 "schema should expose every ErrorCode");
     }
 
+    @Test
+    void validatesCommandArgumentsFromSchema() {
+        JsonObject ok = new JsonObject();
+        ok.addProperty("x", 1);
+        ok.addProperty("z", 2);
+        ApiSchema.validateArgs("goto", ok);
+
+        JsonObject missing = new JsonObject();
+        missing.addProperty("x", 1);
+        ApiException ex = assertThrows(ApiException.class, () -> ApiSchema.validateArgs("goto", missing));
+        assertEquals(ErrorCode.BAD_ARGS, ex.code);
+
+        JsonObject wrong = new JsonObject();
+        wrong.addProperty("events", "chat");
+        assertEquals(ErrorCode.BAD_ARGS,
+                assertThrows(ApiException.class, () -> ApiSchema.validateArgs("subscribe", wrong)).code);
+
+        assertDoesNotThrow(() -> ApiSchema.validateArgs("not-registered", new JsonObject()));
+    }
+
     private static Set<String> minus(Set<String> a, Set<String> b) {
         Set<String> s = new TreeSet<>(a);
         s.removeAll(b);

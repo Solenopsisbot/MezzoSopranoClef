@@ -55,12 +55,21 @@ public final class CommandContext {
     // ---- arg readers ----------------------------------------------------------------
 
     public String str(String key, String def) {
-        return args.has(key) && !args.get(key).isJsonNull() ? args.get(key).getAsString() : def;
+        if (!has(key)) return def;
+        try {
+            return args.get(key).getAsString();
+        } catch (RuntimeException e) {
+            throw ApiException.badArgs("arg '" + key + "' must be a string");
+        }
     }
 
     public String requireStr(String key) {
         if (!has(key)) throw ApiException.badArgs("missing required arg: " + key);
-        return args.get(key).getAsString();
+        try {
+            return args.get(key).getAsString();
+        } catch (RuntimeException e) {
+            throw ApiException.badArgs("arg '" + key + "' must be a string");
+        }
     }
 
     /** Required integer arg. Throws {@link ApiException} ({@code BAD_ARGS}) if missing or non-numeric. */
@@ -94,19 +103,44 @@ public final class CommandContext {
     }
 
     public int i(String key, int def) {
-        return args.has(key) && !args.get(key).isJsonNull() ? args.get(key).getAsInt() : def;
+        if (!has(key)) return def;
+        try {
+            return args.get(key).getAsInt();
+        } catch (RuntimeException e) {
+            throw ApiException.badArgs("arg '" + key + "' must be an integer");
+        }
     }
 
     public double d(String key, double def) {
-        return args.has(key) && !args.get(key).isJsonNull() ? args.get(key).getAsDouble() : def;
+        if (!has(key)) return def;
+        try {
+            return args.get(key).getAsDouble();
+        } catch (RuntimeException e) {
+            throw ApiException.badArgs("arg '" + key + "' must be a number");
+        }
     }
 
     public float f(String key, float def) {
-        return args.has(key) && !args.get(key).isJsonNull() ? args.get(key).getAsFloat() : def;
+        if (!has(key)) return def;
+        try {
+            return args.get(key).getAsFloat();
+        } catch (RuntimeException e) {
+            throw ApiException.badArgs("arg '" + key + "' must be a number");
+        }
     }
 
     public boolean bool(String key, boolean def) {
-        return args.has(key) && !args.get(key).isJsonNull() ? args.get(key).getAsBoolean() : def;
+        if (!has(key)) return def;
+        try {
+            if (!args.get(key).isJsonPrimitive() || !args.getAsJsonPrimitive(key).isBoolean()) {
+                throw ApiException.badArgs("arg '" + key + "' must be a boolean");
+            }
+            return args.get(key).getAsBoolean();
+        } catch (ApiException e) {
+            throw e;
+        } catch (RuntimeException e) {
+            throw ApiException.badArgs("arg '" + key + "' must be a boolean");
+        }
     }
 
     public boolean has(String key) {

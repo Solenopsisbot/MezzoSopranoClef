@@ -1,7 +1,7 @@
 name: CI
 
-# Build + test on every push and pull request. workflow_dispatch lets the heavy
-# e2e job be kicked off by hand from the Actions tab.
+# Build + test on every push and pull request. The separate Live E2E workflow runs heavier
+# real-server verification on demand and on a schedule.
 on:
   push:
   pull_request:
@@ -25,11 +25,14 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '21'
+          java-version: "21"
           cache: gradle
 
       - name: Make gradlew executable
         run: chmod +x ./gradlew
+
+      - name: Check whitespace
+        run: git diff --check
 
       # `./gradlew build` compiles the mod + launcher, runs the JUnit suites, and
       # remaps the jar (Fabric/Loom) into build/libs.
@@ -44,33 +47,20 @@ jobs:
             build/libs/*.jar
             launcher/build/libs/*.jar
 
-  # ---------------------------------------------------------------------------
-  # Heavy end-to-end job: MANUAL ONLY (workflow_dispatch).
-  #
-  # Boots a real headless server + bot and asserts it joins the world and can take
-  # a GPU-free screenshot. With no-GL mode this needs NO xvfb and NO software GL —
-  # on a displayless runner the bot boots on the GLFW null platform. Marked
-  # continue-on-error so a flaky/slow run never blocks CI.
-  # ---------------------------------------------------------------------------
-  e2e:
-    if: ${{ github.event_name == 'workflow_dispatch' }}
+  typescript-client:
+    name: TypeScript client tests
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    continue-on-error: true
+    defaults:
+      run:
+        working-directory: clients/typescript
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up JDK 21
-        uses: actions/setup-java@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          distribution: temurin
-          java-version: '21'
-          cache: gradle
-
-      - name: Make scripts executable
-        run: chmod +x ./gradlew ./scripts/*.sh
-
-      # no-GL boot needs no virtual display: the bot runs windowless on the null platform.
-      - name: Run e2e (headless, no GPU/display)
-        run: ./scripts/e2e.sh
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: clients/typescript/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Test
+        run: npm test

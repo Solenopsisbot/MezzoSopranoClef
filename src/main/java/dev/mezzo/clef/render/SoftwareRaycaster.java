@@ -44,6 +44,17 @@ public final class SoftwareRaycaster {
      */
     private static final int BAND_FACTOR =
             Math.max(1, Integer.getInteger("mezzoclef.render.bandfactor", 8));
+    private static final ForkJoinPool RENDER_POOL = new ForkJoinPool(
+            MAX_THREADS,
+            pool -> {
+                ForkJoinPool.ForkJoinWorkerThreadFactory factory = ForkJoinPool.defaultForkJoinWorkerThreadFactory;
+                java.util.concurrent.ForkJoinWorkerThread t = factory.newThread(pool);
+                t.setName("clef-render-" + t.getPoolIndex());
+                t.setDaemon(true);
+                return t;
+            },
+            null,
+            true);
 
     /** Direction the camera faces, Minecraft yaw/pitch convention. Exposed for tests. */
     public static double[] rotationVector(float yaw, float pitch) {
@@ -85,12 +96,11 @@ public final class SoftwareRaycaster {
 
         // Split rows into contiguous bands; each band writes a disjoint slice of `out`, so the
         // result is independent of how the work is scheduled (deterministic, bit-identical).
-        ForkJoinPool pool = ForkJoinPool.commonPool();
         int rowsPer = (h + bands - 1) / bands;
         List<ForkJoinTask<?>> tasks = new ArrayList<>(bands);
         for (int y0 = 0; y0 < h; y0 += rowsPer) {
             final int yStart = y0, yEnd = Math.min(h, y0 + rowsPer);
-            tasks.add(pool.submit(() -> renderRows(out, yStart, yEnd, scene)));
+            tasks.add(RENDER_POOL.submit(() -> renderRows(out, yStart, yEnd, scene)));
         }
         for (ForkJoinTask<?> t : tasks) t.join();
         return out;

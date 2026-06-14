@@ -34,6 +34,22 @@ class WsConnectionTest {
     }
 
     @Test
+    void rejectsUnmaskedClientFrame() {
+        byte[] frame = {(byte) 0x81, 0x02, 'h', 'i'};
+        WsConnection c = new WsConnection(new ByteArrayInputStream(frame), new ByteArrayOutputStream());
+        assertThrows(IOException.class, c::readMessage);
+    }
+
+    @Test
+    void rejectsNonUpgradeHandshake() throws Exception {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        byte[] req = "GET / HTTP/1.1\r\nHost: x\r\n\r\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        WsConnection c = new WsConnection(new ByteArrayInputStream(req), out);
+        assertEquals(false, c.handshake());
+        assertEquals(true, out.toString(java.nio.charset.StandardCharsets.UTF_8).contains("400 Bad Request"));
+    }
+
+    @Test
     void encodesUnmaskedServerTextFrame() throws Exception {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         WsConnection c = new WsConnection(new ByteArrayInputStream(new byte[0]), out);

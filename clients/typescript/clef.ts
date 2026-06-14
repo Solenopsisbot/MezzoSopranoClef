@@ -23,7 +23,7 @@ export const SUPPORTED_PROTOCOL = 1;
 
 export type ErrorCode =
   | "INVALID_JSON" | "MISSING_CMD" | "UNKNOWN_COMMAND" | "UNAUTHORIZED" | "BAD_TOKEN"
-  | "BAD_ARGS" | "NOT_IN_WORLD" | "NOT_CONNECTED" | "NOT_FOUND" | "COMMAND_FAILED";
+  | "BAD_ARGS" | "NOT_IN_WORLD" | "NOT_CONNECTED" | "NOT_FOUND" | "RATE_LIMIT" | "COMMAND_FAILED";
 
 export type EventName =
   | "welcome" | "chat" | "health" | "damage" | "death" | "respawn" | "join" | "leave"
@@ -82,8 +82,28 @@ export class ClefClient {
       const ws = new WebSocket(this.url);
       this.ws = ws;
       let opened = false;
+      let settled = false;
+      const connectTimer = setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          ws.close();
+          reject(new ClefError("COMMAND_FAILED", `connect timeout after ${this.timeoutMs}ms`));
+        }
+      }, this.timeoutMs);
+      const finishResolve = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(connectTimer);
+        resolve();
+      };
+      const finishReject = (e: unknown) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(connectTimer);
+        reject(e);
+      };
 
-      ws.onmessage = (ev: MessageEvent) => {
+      ws.onmessage = async (ev: MessageEvent) => {
         const raw = typeof ev.data === "string" ? ev.data : String(ev.data);
         let msg: any;
         try { msg = JSON.parse(raw); } catch { return; }
@@ -95,6 +115,14 @@ export class ClefClient {
             if (this.protocol != null && this.protocol !== SUPPORTED_PROTOCOL) {
               console.warn(`[clef] bot protocol ${this.protocol} != client ${SUPPORTED_PROTOCOL}`);
             }
+            this.dispatch(msg.event, msg.data ?? {});
+            try {
+              if (this.token) await this.hello(this.token);
+              finishResolve();
+            } catch (e) {
+              finishReject(e);
+            }
+            return;
           }
           this.dispatch(msg.event, msg.data ?? {});
           return;
@@ -107,24 +135,48 @@ export class ClefClient {
         else p.reject(new ClefError(msg.code ?? "COMMAND_FAILED", msg.error ?? ""));
       };
 
-      ws.onerror = () => { if (!opened) reject(new Error(`failed to connect to ${this.url}`)); };
+      ws.onerror = () => { if (!opened) finishReject(new Error(`failed to connect to ${this.url}`)); };
       ws.onclose = () => {
         for (const p of this.pending.values()) {
           clearTimeout(p.timer);
           p.reject(new ClefError("NOT_CONNECTED", "connection closed"));
         }
         this.pending.clear();
+        if (!settled) finishReject(new ClefError("NOT_CONNECTED", "connection closed before welcome"));
       };
-      ws.onopen = async () => {
+      ws.onopen = () => {
         opened = true;
-        try {
-          if (this.token) await this.hello(this.token);
-          resolve();
-        } catch (e) {
-          reject(e);
-        }
       };
     });
+  }
+
+  async connectRetry(opts: { attempts?: number; initialDelayMs?: number; maxDelayMs?: number } = {}): Promise<void> {
+    const attempts = Math.max(1, opts.attempts ?? 30);
+    let delay = opts.initialDelayMs ?? 500;
+    const maxDelay = opts.maxDelayMs ?? 5000;
+    let last: unknown;
+    for (let i = 0; i < attempts; i++) {
+      try {
+        await this.connect();
+        return;
+      } catch (e) {
+        last = e;
+        this.close();
+        if (i < attempts - 1) await sleep(delay);
+        delay = Math.min(maxDelay, delay * 2);
+      }
+    }
+    throw last instanceof Error ? last : new Error(`failed to connect after ${attempts} attempts`);
+  }
+
+  async reconnect(opts: { attempts?: number; initialDelayMs?: number; maxDelayMs?: number } = {}): Promise<void> {
+    this.close();
+    for (const p of this.pending.values()) {
+      clearTimeout(p.timer);
+      p.reject(new ClefError("NOT_CONNECTED", "reconnecting"));
+    }
+    this.pending.clear();
+    await this.connectRetry(opts);
   }
 
   /** Send `cmd` with `args`; resolves with `result`, rejects with {@link ClefError} on `ok:false`. */
@@ -225,4 +277,8 @@ function b64ToBytes(b64: string): Uint8Array {
   const out = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
   return out;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

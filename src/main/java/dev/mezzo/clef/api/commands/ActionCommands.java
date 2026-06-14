@@ -83,7 +83,7 @@ public final class ActionCommands {
         });
 
         d.register("use", "use held item / right-click air {hand?}", ctx -> {
-            Hand hand = "off".equalsIgnoreCase(ctx.str("hand", "main")) ? Hand.OFF_HAND : Hand.MAIN_HAND;
+            Hand hand = parseHand(ctx.str("hand", "main"));
             return ctx.onMain(() -> {
                 MinecraftClient mc = MinecraftClient.getInstance();
                 if (mc.player == null) throw ApiException.notInWorld();
@@ -195,7 +195,7 @@ public final class ActionCommands {
 
         d.register("interactEntity", "right-click an entity — mount/trade/breed/leash {entityId, hand?}", ctx -> {
             int id = ctx.requireInt("entityId");
-            Hand hand = "off".equalsIgnoreCase(ctx.str("hand", "main")) ? Hand.OFF_HAND : Hand.MAIN_HAND;
+            Hand hand = parseHand(ctx.str("hand", "main"));
             return ctx.onMain(() -> {
                 MinecraftClient mc = MinecraftClient.getInstance();
                 if (mc.player == null || mc.world == null || mc.interactionManager == null) throw ApiException.notInWorld();
@@ -269,8 +269,17 @@ public final class ActionCommands {
         try {
             return Direction.valueOf(s.trim().toUpperCase());
         } catch (Exception e) {
-            return Direction.UP;
+            throw ApiException.badArgs("face must be one of: up, down, north, south, east, west");
         }
+    }
+
+    private static Hand parseHand(String s) {
+        String hand = s == null ? "main" : s.trim().toLowerCase();
+        return switch (hand) {
+            case "main", "main_hand", "mainhand" -> Hand.MAIN_HAND;
+            case "off", "off_hand", "offhand" -> Hand.OFF_HAND;
+            default -> throw ApiException.badArgs("hand must be 'main' or 'off'");
+        };
     }
 
     private static Entity nearest(MinecraftClient mc, double maxDist) {

@@ -7,6 +7,12 @@
   "main": "clef.ts",
   "types": "clef.ts",
   "files": ["clef.ts"],
+  "scripts": {
+    "test": "node --import tsx --test *.test.ts"
+  },
   "keywords": ["minecraft", "bot", "websocket", "mezzosopranoclef"],
-  "dependencies": {}
+  "dependencies": {},
+  "devDependencies": {
+    "tsx": "^4.20.6"
+  }
 }
