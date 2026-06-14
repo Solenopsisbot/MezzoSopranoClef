@@ -56,7 +56,9 @@ public final class WorldSnapshotter {
                             if (state.isAir()) continue;
                             MapColor mc = state.getMapColor(world, pos);
                             if (mc == null || mc == MapColor.CLEAR) continue;
-                            view.set(x, y, z, 0xFF000000 | (mc.color & 0xFFFFFF));
+                            // x/z are clamped to [x0,x1]⊆region and y to [minY,maxY]=region, so the
+                            // voxel is provably in-bounds — skip the redundant per-block range check.
+                            view.setUnchecked(x, y, z, 0xFF000000 | (mc.color & 0xFFFFFF));
                         }
                     }
                 }

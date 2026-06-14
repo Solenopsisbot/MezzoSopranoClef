@@ -4,11 +4,19 @@ package dev.mezzo.clef.render;
  * A dense, array-backed {@link VoxelView} snapshot of a cubic world region. Coordinates outside
  * the captured region read as empty (alpha 0). Pure — no Minecraft types — so it doubles as the
  * test fixture for the raycaster.
+ *
+ * <p>Hot path: {@link #colorAt} is called once per DDA step per pixel by the raycaster (millions
+ * of times per frame), so it is written to do a <i>single</i> subtraction + compare per axis and
+ * a flat index multiply against a precomputed row stride — no redundant {@code contains()} pass,
+ * no per-call object churn. Index math is integer-identical to the obvious form
+ * {@code ((x-minX)*sizeY+(y-minY))*sizeZ+(z-minZ)}.
  */
 public final class ArrayVoxelView implements VoxelView {
 
     private final int minX, minY, minZ;
     private final int sizeX, sizeY, sizeZ;
+    /** Precomputed = sizeY * sizeZ (the per-X-slice stride). Avoids a multiply chain per lookup. */
+    private final int strideX;
     private final int[] argb;
 
     public ArrayVoxelView(int minX, int minY, int minZ, int sizeX, int sizeY, int sizeZ) {
@@ -21,7 +29,8 @@ public final class ArrayVoxelView implements VoxelView {
         this.sizeX = sizeX;
         this.sizeY = sizeY;
         this.sizeZ = sizeZ;
-        this.argb = new int[sizeX * sizeY * sizeZ];
+        this.strideX = sizeY * sizeZ;
+        this.argb = new int[Math.multiplyExact(strideX, sizeX)];
     }
 
     public boolean contains(int x, int y, int z) {
@@ -31,16 +40,30 @@ public final class ArrayVoxelView implements VoxelView {
     }
 
     public void set(int x, int y, int z, int color) {
-        if (contains(x, y, z)) argb[index(x, y, z)] = color;
+        int lx = x - minX, ly = y - minY, lz = z - minZ;
+        if (lx >= 0 && lx < sizeX && ly >= 0 && ly < sizeY && lz >= 0 && lz < sizeZ) {
+            argb[(lx * sizeY + ly) * sizeZ + lz] = color;
+        }
+    }
+
+    /**
+     * Store without a bounds check. Callers <b>must</b> guarantee {@code (x,y,z)} is inside the
+     * region (e.g. the snapshotter, whose loops are clamped to the region). Skips the per-voxel
+     * range test on the tick-blocking snapshot path.
+     */
+    public void setUnchecked(int x, int y, int z, int color) {
+        argb[((x - minX) * sizeY + (y - minY)) * sizeZ + (z - minZ)] = color;
     }
 
     @Override
     public int colorAt(int x, int y, int z) {
-        return contains(x, y, z) ? argb[index(x, y, z)] : 0;
-    }
-
-    private int index(int x, int y, int z) {
-        return ((x - minX) * sizeY + (y - minY)) * sizeZ + (z - minZ);
+        int lx = x - minX;
+        if (lx < 0 || lx >= sizeX) return 0;
+        int ly = y - minY;
+        if (ly < 0 || ly >= sizeY) return 0;
+        int lz = z - minZ;
+        if (lz < 0 || lz >= sizeZ) return 0;
+        return argb[(lx * sizeY + ly) * sizeZ + lz];
     }
 
     public int minX() { return minX; }
