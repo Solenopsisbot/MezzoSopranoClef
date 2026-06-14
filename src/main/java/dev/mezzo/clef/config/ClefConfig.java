@@ -35,11 +35,13 @@ public final class ClefConfig {
         /** Offline username (offline mode only). */
         public String offlineUsername = "ClefBot";
         /**
-         * Azure AD application (public client) ID for the Microsoft device-code flow.
-         * You MUST register your own — see README "Microsoft auth setup". The well-known
-         * Minecraft launcher client id is not redistributable.
+         * Azure AD application (public client) ID for the Microsoft device-code flow. Defaults to
+         * the public client registered for MezzoSopranoClef; override with your own (see README
+         * "Microsoft auth setup") if you'd rather not share this app's throttling/consent. This is
+         * a public-client id, NOT a secret — safe to ship. (The well-known Minecraft launcher
+         * client id, by contrast, is not redistributable, which is why we register our own.)
          */
-        public String azureClientId = "";
+        public String azureClientId = "fec2c6a8-e025-42d8-8b6c-364fb09d8acb";
         /** Where to cache refresh/MC tokens so re-auth is silent. Relative to game dir. */
         public String tokenCacheFile = "mezzoclef/auth-cache.json";
     }

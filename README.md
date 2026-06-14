@@ -194,7 +194,7 @@ First run writes `config/mezzoclef.json`. Anything can be overridden by a `-Dmez
   "auth": {
     "mode": "offline",                 // "offline" or "microsoft"
     "offlineUsername": "ClefBot",
-    "azureClientId": "",               // REQUIRED for microsoft mode (see below)
+    "azureClientId": "fec2c6a8-e025-42d8-8b6c-364fb09d8acb",  // bundled app; override with your own (see below)
     "tokenCacheFile": "mezzoclef/auth-cache.json"
   },
   "connection": {
@@ -232,14 +232,18 @@ Handy overrides: `-Dmezzoclef.headless=false`, `-Dmezzoclef.ws.port=9000`,
 
 ## Microsoft auth setup (one-time)
 
-The device-code flow needs **your own** Azure AD application — the official launcher's client id
-isn't redistributable. It's free:
+MezzoSopranoClef ships with a bundled public-client Azure app id, so microsoft mode works out of
+the box: set `auth.mode` to `microsoft` and run. (The official launcher's client id, by contrast,
+isn't redistributable — hence a project-specific one. A public-client id is not a secret.)
+
+**Prefer your own app** (so you don't share the bundled app's throttling/consent)? It's free:
 
 1. Azure Portal → *App registrations* → *New registration*. Account type: *Personal Microsoft
    accounts*.
-2. *Authentication* → *Advanced* → enable **Allow public client flows** = Yes.
-3. Copy the **Application (client) ID** into `auth.azureClientId` and set `auth.mode` to
-   `microsoft`.
+2. *Authentication* → *Advanced settings* → **Allow public client flows** = **Yes**, then *Save*.
+   Skipping this is the #1 failure: without it Azure rejects the device-code flow with
+   `AADSTS70002: … must be marked as 'mobile'`.
+3. Copy the **Application (client) ID** into `auth.azureClientId`.
 
 On first run the bot logs (and broadcasts over the control plane) a URL + code:
 

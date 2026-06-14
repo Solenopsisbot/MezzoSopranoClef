@@ -35,8 +35,16 @@ loom {
         client {
             client()
             configName = 'Headless Bot Client'
-            // Headless mode + skip the multiplayer GUI nag. Auth/config read at runtime.
-            vmArgs '-Dmezzoclef.headless=true'
+            // Headless by default; overridable via -Dmezzoclef.headless=... on the invocation.
+            if (System.getProperty('mezzoclef.headless') == null) {
+                vmArgs '-Dmezzoclef.headless=true'
+            }
+            // A plain `-Dmezzoclef.*` on `./gradlew` only reaches the Gradle daemon JVM, NOT the
+            // separate JVM Loom forks for the client — so e.g. `runClient -Dmezzoclef.dashboard=true`
+            // was silently dropped. Forward every mezzoclef.* system property into the game JVM.
+            System.properties.each { k, v ->
+                if (k.toString().startsWith('mezzoclef.')) vmArgs("-D${k}=${v}".toString())
+            }
             // Uncomment to bind the control plane somewhere other than the default:
             // vmArgs '-Dmezzoclef.ws.host=127.0.0.1', '-Dmezzoclef.ws.port=8731'
         }
