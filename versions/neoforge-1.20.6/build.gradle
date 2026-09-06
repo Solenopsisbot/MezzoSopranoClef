@@ -1,8 +1,8 @@
-// Native NeoForge build for Minecraft 1.21.11.
+// Native NeoForge build for Minecraft 1.20.6.
 //
 // The NeoForge target for this release. NeoForge uses Mojang's official mappings natively, which is the
 // same naming the whole Fabric matrix is built against — so `common/` and the per-release glue in
-// `../mc-1.21.11/` are shared verbatim, and only the loader-facing layer (entrypoint, platform,
+// `../mc-1.20.6/` are shared verbatim, and only the loader-facing layer (entrypoint, platform,
 // event wiring) lives here.
 //
 // Built with ModDevGradle rather than Loom; the two plugins coexist because they are applied
@@ -13,8 +13,8 @@ plugins {
 }
 
 ext {
-    mcVersion = '1.21.11'
-    neoForgeVersion = '21.11.45'
+    mcVersion = '1.20.6'
+    neoForgeVersion = '20.6.141'
     javaMajor = 21
 }
 
@@ -53,7 +53,7 @@ sourceSets {
     main {
         // common/ is loader-neutral; mc-1.21.8/ is this release's Minecraft glue, shared with the
         // Fabric 1.21.8 target. Only src/main/java here is NeoForge-specific.
-        java.srcDirs = ['../../common/src/main/java', '../mc-1.21.11/src/main/java', 'src/main/java']
+        java.srcDirs = ['../../common/src/main/java', '../mc-1.20.6/src/main/java', 'src/main/java']
         resources.srcDirs = ['../../common/src/main/resources', 'src/main/resources']
 
     }

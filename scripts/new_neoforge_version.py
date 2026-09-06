@@ -221,6 +221,14 @@ def scaffold_neoforge(mc, nf_version, java_major):
     (dst / "src/main/resources/mezzoclef.mixins.json").write_text(
         json.dumps(fab_mixins, indent=2) + "\n")
 
+    # NeoForge renamed the metadata file in 1.20.5; older targets need the original name.
+    def nf_key(v):
+        parts = [int(x) for x in v.split(".")[:2]]
+        return parts[0] * 1000 + parts[1]
+    if nf_key(nf_version) < nf_key("20.5"):
+        meta = dst / "src/main/resources/META-INF"
+        (meta / "neoforge.mods.toml").rename(meta / "mods.toml")
+
     settings = ROOT / "settings.gradle"
     text = settings.read_text()
     line = f"include 'versions:neoforge-{mc}'"
