@@ -108,15 +108,19 @@ Drop that version's mods into the module's `run/mods/` alongside the bot.
 1.20.4, 1.20.1, 1.19.4, 1.19.2, 1.18.2, 1.17.1, 1.16.5, 1.15.2 and 1.14.4 — every Fabric release
 back to the oldest one Mojang publishes mappings for.
 
-**NeoForge 1.21.8** is the first non-Fabric target, and it emits a byte-identical control-plane
-event stream to its Fabric twin. The two share everything except the loader layer: `common/` is
-loader-neutral behind `ModPlatform`, `versions/mc-1.21.8/` holds that release's Minecraft glue
-(including `ClefBotCore`, the whole bot), and each loader module contributes only a platform
-implementation and a small class wiring its own events onto the core.
+**NeoForge covers its whole range**: 1.21.11, 1.21.8, 1.21.5, 1.21.4, 1.21.1, 1.20.6 and 1.20.4 —
+NeoForge itself begins at 1.20.2. Each emits a control-plane event stream identical to its Fabric
+twin. The two loaders share everything except the loader layer: `common/` is loader-neutral behind
+`ModPlatform`, `versions/mc-<mc>/` holds that release's Minecraft glue (including `ClefBotCore`,
+which is the whole bot), and each loader module contributes only a platform implementation and a
+small class wiring its own events onto the core — 36 lines on Fabric, 48 on NeoForge.
+
+`scripts/new_neoforge_version.py <mc> <neoForgeVersion> <javaMajor>` does both halves: splits an
+existing Fabric module into the shared part and the Fabric-only remainder, then scaffolds the
+NeoForge target. Four of the seven needed no source changes at all.
 
 **What does not exist yet**, and is not pretended to (`nativeClientsNotStarted` in the matrix
-file spells out why): **any Forge target**, NeoForge on releases other than 1.21.8, 1.12.2, and
-Fabric 1.13.2 and older. Forge is a different loader again, though it would now reuse the seam
+file spells out why): **any Forge target**, 1.12.2, and Fabric 1.13.2 and older. Forge is a different loader again, though it would now reuse the seam
 NeoForge proved out. 1.14.4 is the floor for a different reason: it is the first release with
 official Mojang mappings, and those are what let `common/` be shared verbatim across the matrix.
 

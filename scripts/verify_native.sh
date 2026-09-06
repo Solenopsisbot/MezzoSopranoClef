@@ -46,8 +46,16 @@ for v in "${VERSIONS[@]}"; do
   echo "[native] ===== $v (task $task) ====="
   pkill -f "mezzoclef.headless=true" 2>/dev/null || true
   pkill -f "server.jar nogui" 2>/dev/null || true
+  # Wait for the previous target's client JVM to actually exit. pkill only signals it; a client
+  # still shutting down while the next one boots means two Minecraft JVMs competing for CPU, and
+  # the new one then misses keep-alives and gets dropped by its server ("lost connection: Timed
+  # out"). That is what made older targets fail intermittently in long serial runs.
+  for _ in $(seq 1 60); do
+    pgrep -f "mezzoclef.headless=true" >/dev/null 2>&1 || break
+    sleep 1
+  done
   # Wait for the previous target's server to actually release the port. A blind sleep is not
-  # enough on a 16-target serial run: if the old server still holds 25565 the next one cannot
+  # enough on a long serial run: if the old server still holds 25565 the next one cannot
   # bind, and the client ends up talking to the wrong version (or nothing).
   for _ in $(seq 1 30); do
     lsof -nP -iTCP:"${CLEF_SERVER_PORT:-25565}" -sTCP:LISTEN >/dev/null 2>&1 || break
