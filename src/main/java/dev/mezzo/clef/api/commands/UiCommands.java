@@ -4,6 +4,9 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import dev.mezzo.clef.api.ApiException;
 import dev.mezzo.clef.api.CommandDispatcher;
+import dev.mezzo.clef.api.ScreenNames;
+import dev.mezzo.clef.bot.Hotbar;
+import dev.mezzo.clef.bot.RecipeIndex;
 import dev.mezzo.clef.mixin.client.BossBarHudAccessor;
 import dev.mezzo.clef.mixin.client.InGameHudAccessor;
 import net.minecraft.client.MinecraftClient;
@@ -42,7 +45,8 @@ public final class UiCommands {
             JsonObject o = new JsonObject();
             o.addProperty("handler", h.getClass().getSimpleName());
             o.addProperty("syncId", h.syncId);
-            o.addProperty("screen", mc.currentScreen != null ? mc.currentScreen.getClass().getSimpleName() : "none");
+            o.addProperty("screen", ScreenNames.of(mc.currentScreen));
+            o.addProperty("screenClass", ScreenNames.rawOf(mc.currentScreen));
             JsonArray slots = new JsonArray();
             for (Slot s : h.slots) {
                 JsonObject js = new JsonObject();
@@ -119,7 +123,8 @@ public final class UiCommands {
             MinecraftClient mc = MinecraftClient.getInstance();
             JsonObject o = new JsonObject();
             Screen sc = mc.currentScreen;
-            o.addProperty("screen", sc != null ? sc.getClass().getSimpleName() : "none");
+            o.addProperty("screen", ScreenNames.of(sc));
+            o.addProperty("screenClass", ScreenNames.rawOf(sc));
             JsonArray ws = new JsonArray();
             if (sc != null) {
                 int i = 0;
@@ -258,6 +263,23 @@ public final class UiCommands {
                 throw ApiException.notFound("no '" + q + "' in inventory");
             });
         });
+
+        d.register("moveToHotbar",
+                "put an item on the hotbar and select it, swapping it in if needed {item, slot?}",
+                ctx -> {
+                    String q = ctx.requireStr("item");
+                    Integer slot = ctx.has("slot") ? ctx.i("slot", 0) : null;
+                    return ctx.onMain(() -> {
+                        MinecraftClient mc = MinecraftClient.getInstance();
+                        if (mc.player == null) throw ApiException.notInWorld();
+                        Hotbar.Selection selection = Hotbar.select(mc, RecipeIndex.resolveItem(q), slot);
+                        JsonObject o = new JsonObject();
+                        o.addProperty("slot", selection.slot());
+                        o.addProperty("moved", selection.moved());
+                        o.addProperty("fromSlot", selection.fromSlot());
+                        return o;
+                    });
+                });
 
         d.register("deposit", "shift-click matching items from inventory INTO the open container {item}", ctx -> {
             String q = ctx.requireStr("item");

@@ -19,7 +19,7 @@
  */
 
 /** Highest control protocol this client was written against (welcome.protocol / schema.protocol). */
-export const SUPPORTED_PROTOCOL = 1;
+export const SUPPORTED_PROTOCOL = 2;
 
 export type ErrorCode =
   | "INVALID_JSON" | "MISSING_CMD" | "UNKNOWN_COMMAND" | "UNAUTHORIZED" | "BAD_TOKEN"
@@ -28,7 +28,26 @@ export type ErrorCode =
 export type EventName =
   | "welcome" | "chat" | "health" | "damage" | "death" | "respawn" | "join" | "leave"
   | "connected" | "disconnected" | "tick" | "screenOpen" | "screenClose"
-  | "entitySpawn" | "entityRemove" | "auth.prompt" | "auth.ok" | "auth.error";
+  | "entitySpawn" | "entityRemove" | "entityHurt" | "itemPickup" | "inventory"
+  | "blockUpdate" | "explosion" | "weather" | "time" | "sleep" | "title" | "mineDone"
+  | "nav.done" | "nav.failed" | "nav.progress" | "baritone.log"
+  | "auth.prompt" | "auth.ok" | "auth.error";
+
+/**
+ * Stable, remap-proof screen names (`status.screen`, `screenOpen.screen`). The raw class name is
+ * alongside as `screenClass`, but it is obfuscated outside a development run — `class_424`, not
+ * `TitleScreen` — so branch on this, not on that.
+ */
+export type ScreenName =
+  | "none" | "title" | "connect" | "disconnected" | "death" | "downloading" | "message"
+  | "inventory" | "crafting" | "furnace" | "anvil" | "enchanting" | "merchant" | "sign"
+  | "book" | "container" | "other";
+
+/** `nav.check`'s answer. `unknown` means the search ran out of budget, not that there is no route. */
+export type NavVerdict = "reachable" | "unreachable" | "unknown";
+
+/** The closed set the `chat` event's `kind` field takes since protocol 2. */
+export type ChatKind = "chat" | "system" | "whisper" | "team" | "actionbar";
 
 export interface ClefOptions {
   host?: string;          // default 127.0.0.1
@@ -241,26 +260,154 @@ export class ClefClient {
   chat(message: string) { return this.call("chat", { message }); }
   look(yaw?: number, pitch?: number) { return this.call("look", prune({ yaw, pitch })); }
   players() { return this.call<any[]>("players"); }
-  goto(x: number, z: number, y?: number) { return this.call("goto", prune({ x, z, y })); }
-  baritone(command: string) { return this.call("baritone", { command }); }
+  /**
+   * Start pathing. Resolves as soon as Baritone accepts the goal — listen for `nav.done` /
+   * `nav.failed` for the outcome rather than polling `nav.status`.
+   */
+  goto(x: number, z: number, y?: number, reach?: number) { return this.call("goto", prune({ x, z, y, reach })); }
+  /**
+   * Cheap walkability **estimate** — a walk-only A* over the loaded chunks, not Baritone's planner.
+   * Nothing moves. Branch on `verdict`: `unknown` means the search hit its node budget, which is
+   * not the same as proving there is no route, and Baritone may well get there anyway.
+   */
+  navCheck(x: number, y: number, z: number, opts: { reach?: number; maxNodes?: number } = {}) {
+    return this.call<{ verdict: NavVerdict; reachable: boolean; cost?: number; nodes: number; exhausted: boolean }>(
+      "nav.check", prune({ x, y, z, ...opts }));
+  }
+  /**
+   * Run any Baritone command. Resolves with the lines Baritone printed within `collectMs`, which is
+   * how you read the output of `find`, `eta`, or "No known locations of ...".
+   *
+   * Commands naming a block (`goto jungle_log`, `mine diamond_ore`) are safe: the bot pre-initialises
+   * Baritone's block-argument machinery off the client thread, and refuses the command outright
+   * rather than running it if that initialisation failed.
+   */
+  baritone(command: string, collectMs?: number) {
+    return this.call<{ ran: string; backend: string; output: string[] }>("baritone", prune({ command, collectMs }));
+  }
   navStop() { return this.call("nav.stop"); }
   move(flags: Record<string, any>) { return this.call("move", flags); }
   stopMove() { return this.call("stopMove"); }
-  mine(x: number, y: number, z: number, face?: string) { return this.call("mine", prune({ x, y, z, face })); }
-  place(x: number, y: number, z: number, face?: string) { return this.call("place", prune({ x, y, z, face })); }
+  /** Break a block. With `wait`, resolves only once it is broken or refused. */
+  mine(x: number, y: number, z: number, opts: { face?: string; wait?: boolean } = {}) {
+    return this.call("mine", prune({ x, y, z, ...opts }));
+  }
+  /** Place against a block face. `item` is selected first; `placed` is verified against the world. */
+  place(x: number, y: number, z: number, opts: { face?: string; item?: string; confirm?: boolean } = {}) {
+    return this.call<{ placed: boolean; confirmed: boolean }>("place", prune({ x, y, z, ...opts }));
+  }
+  /** Put an item on the hotbar and select it, swapping it in from the inventory if needed. */
+  moveToHotbar(item: string, slot?: number) { return this.call<{ slot: number }>("moveToHotbar", prune({ item, slot })); }
   breakBlock(x: number, y: number, z: number) { return this.call("breakBlock", { x, y, z }); }
   use(hand?: string) { return this.call("use", prune({ hand })); }
   attack(entityId?: number) { return this.call("attack", prune({ entityId })); }
   setSlot(slot: number) { return this.call("setSlot", { slot }); }
   inventory() { return this.call("inventory"); }
-  entities(radius?: number) { return this.call<any[]>("entities", prune({ radius })); }
+  /** Nearby entities with health, hostility, held item and trade data. `kinds` filters by type id. */
+  entities(radius?: number, kinds?: string[]) { return this.call<any[]>("entities", prune({ radius, kinds })); }
   blockAt(x: number, y: number, z: number) { return this.call("blockAt", { x, y, z }); }
 
-  /** Render a PNG and return its raw bytes. opts: x,y,z,yaw,pitch,width,height,fov. */
+  // ---- bulk world queries ----------------------------------------------------------
+
+  /** Nearest matching blocks in the loaded chunks. `ids` accepts block ids and `#tag` names. */
+  findBlocks(ids: string[], opts: { radius?: number; max?: number; sort?: "nearest" | "none" } = {}) {
+    return this.call<Array<{ x: number; y: number; z: number; block: string; distance: number }>>(
+      "findBlocks", prune({ ids, ...opts }));
+  }
+  /** Dense readout of a block cuboid; decode the default palette form with {@link decodeBlocksIn}. */
+  blocksIn(min: [number, number, number], max: [number, number, number], palette = true) {
+    return this.call<BlocksInResult>("blocksIn", {
+      minX: min[0], minY: min[1], minZ: min[2], maxX: max[0], maxY: max[1], maxZ: max[2], palette,
+    });
+  }
+  /** What is under the crosshair, raycast on demand (so it works headless). */
+  target(maxDistance?: number, fluids?: boolean) { return this.call("target", prune({ maxDistance, fluids })); }
+  /** Block/item/entity ids the running Minecraft version actually has. */
+  registry(kinds?: string[], tags?: boolean) { return this.call("registry", prune({ kinds, tags })); }
+  lookAt(target: { x: number; y: number; z: number } | { entityId: number }) {
+    return this.call("lookAt", target as Record<string, any>);
+  }
+
+  // ---- crafting --------------------------------------------------------------------
+
+  /** Craft via the open crafting screen, else the 2x2 player grid. Resolves when the craft ends. */
+  craft(item: string, opts: { count?: number; all?: boolean } = {}) {
+    return this.call<{ crafted: number; item: string; reason?: string }>("craft", prune({ item, ...opts }));
+  }
+  recipes(item: string) { return this.call<any[]>("recipes", { item }); }
+  craftable() { return this.call<{ grid: string; items: any[] }>("craftable"); }
+
+  // ---- chat ------------------------------------------------------------------------
+
+  chatHistory(limit?: number) { return this.call<{ lines: any[]; stored: number }>("chatHistory", prune({ limit })); }
+  /** Private-message a player using whichever of msg/tell/w/whisper this server has. */
+  whisper(player: string, text: string) { return this.call("whisper", { player, text }); }
+  /** Run several commands in order over one round-trip. */
+  batch(commands: Array<{ cmd: string; args?: Record<string, any> }>, continueOnError = false) {
+    return this.call<{ results: any[]; ran: number }>("batch", { commands, continueOnError });
+  }
+
+  /**
+   * Render a PNG and return its raw bytes. opts: x,y,z,yaw,pitch,width,height,fov for the free
+   * camera, or `{ mode: "topdown", centerX, centerZ, radius }` for an orthographic map.
+   */
   async screenshot(opts: Record<string, any> = {}): Promise<Uint8Array> {
     const res = await this.call<{ base64: string }>("screenshot", opts);
     return b64ToBytes(res.base64);
   }
+
+  /** Like {@link screenshot}, but also returns the camera and each visible entity's screen box. */
+  async screenshotAnnotated(opts: Record<string, any> = {}): Promise<{
+    png: Uint8Array;
+    camera: Record<string, any>;
+    entities: Array<{ id: number; type: string; visible: boolean; box?: number[]; depth?: number }>;
+  }> {
+    const res = await this.call<any>("screenshot", { ...opts, annotate: true });
+    return { png: b64ToBytes(res.base64), camera: res.camera, entities: res.entities ?? [] };
+  }
+
+  /** Orthographic top-down map PNG, east-right and north-up, centred on the bot. */
+  map(radius = 32, opts: Record<string, any> = {}): Promise<Uint8Array> {
+    return this.screenshot({ ...opts, mode: "topdown", radius });
+  }
+}
+
+/** The palette form of a {@link ClefClient.blocksIn} result. */
+export interface BlocksInResult {
+  size: [number, number, number];
+  origin: [number, number, number];
+  order: string;
+  palette?: string[];
+  encoding?: string;
+  data?: string;
+  blocks?: string[];
+}
+
+/**
+ * Expands a palette-encoded `blocksIn` result into a flat array of block ids, in the x-major order
+ * the bot documents: `i = ((x-minX)*sizeY + (y-minY))*sizeZ + (z-minZ)`.
+ *
+ * Blocks in chunks the server has not sent read as `"unloaded"` — which is not the same as air.
+ */
+export function decodeBlocksIn(result: BlocksInResult): string[] {
+  if (result.blocks) return result.blocks;
+  if (!result.palette || !result.data) throw new Error("blocksIn result has neither blocks nor palette data");
+  const bytes = b64ToBytes(result.data);
+  const [sx, sy, sz] = result.size;
+  const out: string[] = [];
+  let value = 0;
+  let shift = 0;
+  for (const byte of bytes) {
+    value |= (byte & 0x7f) << shift;
+    if (byte & 0x80) { shift += 7; continue; }
+    out.push(result.palette[value]);
+    value = 0;
+    shift = 0;
+  }
+  if (out.length !== sx * sy * sz) {
+    throw new Error(`decoded ${out.length} blocks, expected ${sx * sy * sz}`);
+  }
+  return out;
 }
 
 /** Drops undefined values so optional args are simply omitted from the request. */

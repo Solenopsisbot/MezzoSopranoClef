@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ClefClient, ClefError } from "./clef.ts";
+import { ClefClient, ClefError, SUPPORTED_PROTOCOL, decodeBlocksIn } from "./clef.ts";
 
 type Handler = ((event?: any) => void) | null;
 
@@ -19,7 +19,7 @@ class FakeWebSocket {
     queueMicrotask(() => {
       this.readyState = this.OPEN;
       this.onopen?.({});
-      this.emit({ event: "welcome", data: { protocol: 1, requiresAuth: true } });
+      this.emit({ event: "welcome", data: { protocol: SUPPORTED_PROTOCOL, requiresAuth: true } });
     });
   }
 
@@ -27,7 +27,7 @@ class FakeWebSocket {
     this.sent.push(text);
     const msg = JSON.parse(text);
     if (msg.cmd === "hello") {
-      this.emit({ id: msg.id, ok: true, result: { authed: true, protocol: 1, scope: "full" } });
+      this.emit({ id: msg.id, ok: true, result: { authed: true, protocol: SUPPORTED_PROTOCOL, scope: "full" } });
     } else if (msg.cmd === "ping") {
       this.emit({ id: msg.id, ok: true, result: { pong: true } });
     }
@@ -60,7 +60,7 @@ test("connect waits for welcome and authenticates before resolving", async () =>
 
   await bot.connect();
 
-  assert.equal(bot.protocol, 1);
+  assert.equal(bot.protocol, SUPPORTED_PROTOCOL);
   assert.equal(bot.requiresAuth, true);
   assert.equal(FakeWebSocket.instances[0].sent.length, 1);
   assert.equal(JSON.parse(FakeWebSocket.instances[0].sent[0]).cmd, "hello");
@@ -85,4 +85,52 @@ test("reconnect clears pending calls and reconnects", async () => {
 
   assert.equal((pong as any).pong, true);
   assert.equal(FakeWebSocket.instances.length, 2);
+});
+
+test("decodeBlocksIn expands the palette form in x-major order", () => {
+  // 2x1x2 region: two block types alternating, indices [0,1,1,0].
+  const decoded = decodeBlocksIn({
+    size: [2, 1, 2],
+    origin: [0, 0, 0],
+    order: "x-major",
+    palette: ["minecraft:stone", "minecraft:dirt"],
+    encoding: "base64 LEB128 varint indices into palette",
+    data: Buffer.from([0, 1, 1, 0]).toString("base64"),
+  });
+
+  assert.deepEqual(decoded, [
+    "minecraft:stone", "minecraft:dirt",   // x=0: z=0, z=1
+    "minecraft:dirt", "minecraft:stone",   // x=1: z=0, z=1
+  ]);
+});
+
+test("decodeBlocksIn handles multi-byte varints and the unpacked form", () => {
+  // Index 200 needs two bytes: 0xC8 0x01.
+  const palette = Array.from({ length: 201 }, (_, i) => `mod:block_${i}`);
+  const decoded = decodeBlocksIn({
+    size: [1, 1, 1],
+    origin: [0, 0, 0],
+    order: "x-major",
+    palette,
+    data: Buffer.from([0xc8, 0x01]).toString("base64"),
+  });
+  assert.deepEqual(decoded, ["mod:block_200"]);
+
+  const unpacked = decodeBlocksIn({
+    size: [1, 1, 2],
+    origin: [0, 0, 0],
+    order: "x-major",
+    blocks: ["minecraft:air", "minecraft:stone"],
+  });
+  assert.deepEqual(unpacked, ["minecraft:air", "minecraft:stone"]);
+});
+
+test("decodeBlocksIn refuses a payload that does not fill the region", () => {
+  assert.throws(() => decodeBlocksIn({
+    size: [4, 4, 4],
+    origin: [0, 0, 0],
+    order: "x-major",
+    palette: ["minecraft:stone"],
+    data: Buffer.from([0]).toString("base64"),
+  }), /expected 64/);
 });
