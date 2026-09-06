@@ -39,7 +39,9 @@ cat > "$ROOT/run/config/mezzoclef.json" <<EOF2
 EOF2
 
 echo "[versions] launching bot (gradlew runClient)... logs -> e2e/bot-versions.log"
-./gradlew runClient --console=plain > "$ROOT/e2e/bot-versions.log" 2>&1 &
+# Leading colon: every version module also defines runClient, so the unqualified name
+# would launch all of them instead of just the root project's client.
+./gradlew :runClient --console=plain > "$ROOT/e2e/bot-versions.log" 2>&1 &
 BOT_PID=$!
 
 CLEF_WS_HOST=127.0.0.1 CLEF_WS_PORT="$WS_PORT" CLEF_BOT_NAME="$BOT_NAME" \

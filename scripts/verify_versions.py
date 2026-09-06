@@ -29,6 +29,7 @@ import json
 import os
 import re
 import signal
+import shutil
 import subprocess
 import sys
 import time
@@ -213,6 +214,19 @@ def main(argv):
             log(f"{v}: SKIP — not a ViaFabricPlus-known release")
             continue
         results.append(test_version(s, v, port, auto, world_timeout, bot_name, outdir))
+        # Drop the server jar and generated world before the next release. A full --all run walks
+        # every release since 1.12.2; keeping them all is several gigabytes and will fill the disk
+        # long before the run ends. The log is kept when the version failed, since that is the one
+        # artefact that makes a join failure diagnosable.
+        sdir = os.path.join(ROOT, "e2e", "servers", v)
+        if not results[-1]["ok"]:
+            try:
+                shutil.copy(os.path.join(sdir, "server.log"),
+                            os.path.join(outdir, f"matrix-{v}-server.log"))
+            except OSError:
+                pass
+        if os.environ.get("KEEP_SERVERS") != "1":
+            shutil.rmtree(sdir, ignore_errors=True)
         # Give the bot a moment to settle back on the title screen between servers.
         time.sleep(2)
 
