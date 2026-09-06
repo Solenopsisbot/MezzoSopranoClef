@@ -53,3 +53,4 @@ include 'versions:fabric-1.14.4'
 // glue that this and the Fabric 1.21.8 target both compile.
 // ---------------------------------------------------------------------------
 include 'versions:neoforge-1.21.8'
+include 'versions:neoforge-1.21.1'

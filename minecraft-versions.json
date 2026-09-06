@@ -649,6 +649,14 @@
       "noGl": false,
       "status": "runtime-verified",
       "verifiedOn": "2026-09-06"
+    },
+    {
+      "minecraft": "1.21.1",
+      "loader": "neoforge",
+      "java": 21,
+      "module": "versions/neoforge-1.21.1",
+      "noGl": false,
+      "status": "jar-built"
     }
   ],
   "nativeClientsNotStarted": {
