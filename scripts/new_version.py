@@ -91,14 +91,6 @@ processResources {{
 '''
 
 
-def next_minor(mc):
-    """Upper bound for the fabric.mod.json minecraft range (exclusive)."""
-    parts = [int(x) for x in re.findall(r"\d+", mc)]
-    if parts[0] >= 26:
-        return f"{parts[0]}.{parts[1] + 1}"
-    return f"1.{parts[1] + 1}"
-
-
 def api_minor(api):
     """Minor version of a Fabric API string like `0.46.1+1.17` -> 46."""
     return int(api.split("+")[0].split(".")[1])
@@ -121,7 +113,10 @@ def main():
 
     fmj = dst / "src/main/resources/fabric.mod.json"
     s = fmj.read_text()
-    s = re.sub(r'"minecraft": "[^"]*"', f'"minecraft": ">={mc} <{next_minor(mc)}"', s)
+    # Exact, not a minor range: the module is built against one release and its mixins target that
+    # release's classes, so a wider range loads on a version where they cannot apply — a hard
+    # startup crash rather than the loader's clean "incompatible mod".
+    s = re.sub(r'"minecraft": "[^"]*"', f'"minecraft": "{mc}"', s)
     s = re.sub(r'"java": ">=\d+"', f'"java": ">={java}"', s)
     # Fabric API published itself under the mod id `fabric` until 0.75.0, which renamed it to
     # `fabric-api` and kept `fabric` as a `provides` alias. Depending on `fabric` therefore

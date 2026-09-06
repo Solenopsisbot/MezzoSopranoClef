@@ -18,7 +18,11 @@
 FROM --platform=linux/amd64 eclipse-temurin:25-jdk AS build
 WORKDIR /src
 COPY . .
-RUN ./gradlew :launcher:jar --no-daemon \
+# --configure-on-demand matters here: settings.gradle now includes 23 per-version modules, and
+# Loom/ModDevGradle provision and remap Minecraft at CONFIGURATION time. Without it, building only
+# the launcher still downloads client+server jars and mappings for 1.14.4 … 1.21.11 plus the
+# NeoForge/Forge setups — in a stage that is then thrown away. With it, only the root is configured.
+RUN ./gradlew :launcher:jar --configure-on-demand --no-daemon \
     && cp launcher/build/libs/mezzosopranoclef-launcher-*.jar /launcher.jar
 
 # --- runtime stage: a JRE + the self-bootstrapping launcher. ---

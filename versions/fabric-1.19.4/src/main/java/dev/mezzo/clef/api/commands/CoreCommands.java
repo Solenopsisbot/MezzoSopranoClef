@@ -145,7 +145,11 @@ public final class CoreCommands {
             JsonObject o = new JsonObject();
             o.addProperty("username", s.getName());
             o.addProperty("uuid", String.valueOf(s.getProfileId()));
-            o.addProperty("type", (s.getProfileId() == null ? "LEGACY" : "MSA"));
+            // Report the type of the session we actually injected. There is nothing on User to
+            // infer it from: 26.x dropped User.Type, and getProfileId() is non-null for offline
+            // sessions too (OfflineAuth derives a stable UUID), so a null check there calls every
+            // offline bot "MSA" — the default mode for the e2e scripts and the Docker image.
+            o.addProperty("type", dev.mezzo.clef.auth.AuthManager.activeAccountType());
             return o;
         }));
 

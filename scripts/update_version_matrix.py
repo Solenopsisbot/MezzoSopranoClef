@@ -3,10 +3,13 @@
 Fold a scripts/verify_versions.py report into minecraft-versions.json.
 
 Every release that the run actually joined becomes `verified` (with the date, the protocol the
-bot selected, and the client version). Failures become `failed` with the error. Releases that
-were not part of the run are left alone, except that an untested release wedged between two
-verified neighbours that share its protocol is marked `expected` (never `verified`) — the file
-never claims more than was demonstrated.
+bot selected, and the client version). Failures become `failed` with the error. Releases that were
+not part of the run are left alone.
+
+There is deliberately no inference step: an untested release is not marked from its neighbours'
+results, so the file never claims more than was demonstrated. (An earlier version of this docstring
+described an `expected` status derived that way; the code never implemented it, and every release is
+now verified directly, so the status does not exist.)
 
 Usage: update_version_matrix.py [report.json]   (default e2e/versions-report.json)
 """

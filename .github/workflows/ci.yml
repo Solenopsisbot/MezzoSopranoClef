@@ -46,9 +46,12 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: jars
+          # Forge is excluded on purpose: it builds but its mixins never apply, so uploading the
+          # jar invites someone to run a client that cannot work.
           path: |
             build/libs/*.jar
-            versions/*/build/libs/*.jar
+            versions/fabric-*/build/libs/*.jar
+            versions/neoforge-*/build/libs/*.jar
             launcher/build/libs/*.jar
 
   typescript-client:

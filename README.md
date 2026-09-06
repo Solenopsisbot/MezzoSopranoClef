@@ -172,7 +172,7 @@ existing Fabric module into the shared part and the Fabric-only remainder, then 
 NeoForge target. Four of the seven needed no source changes at all.
 
 **What does not exist yet**, and is not pretended to (`nativeClientsNotStarted` in the matrix
-file spells out why): **any Forge target**, 1.12.2, and Fabric 1.13.2 and older. Forge is a different loader again, though it would now reuse the seam
+file spells out why): **a working Forge target**, 1.12.2, and Fabric 1.13.2 and older. A Forge 1.20.1 module is present and builds a jar, but none of its mixins apply, so it does not run — it is `jar-built` in the matrix, never counted as verified, and the jar CI uploads for it will not work. Forge is a different loader again, though it would now reuse the seam
 NeoForge proved out. 1.14.4 is the floor for a different reason: it is the first release with
 official Mojang mappings, and those are what let `common/` be shared verbatim across the matrix.
 

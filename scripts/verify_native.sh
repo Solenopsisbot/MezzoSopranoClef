@@ -23,9 +23,15 @@ if [[ $# -gt 0 ]]; then
   VERSIONS=("$@")
 else
   # Targets are named "<mc>" for Fabric (the default loader) and "<loader>-<mc>" otherwise.
+  # Only targets that are expected to boot. An entry recorded `jar-built` is one the matrix file
+  # itself says does not run yet (forge-1.20.1: "mixins never apply"), so running it by default
+  # would fail the nightly job on every scheduled run regardless of any real regression. Name a
+  # target explicitly to run it anyway.
   mapfile -t VERSIONS < <(python3 -c "
 import json
 for e in json.load(open('minecraft-versions.json'))['nativeClients']:
+    if e.get('status') == 'jar-built':
+        continue
     loader = e.get('loader', 'fabric')
     print(e['minecraft'] if loader == 'fabric' else loader + '-' + e['minecraft'])")
 fi
