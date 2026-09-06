@@ -80,8 +80,11 @@ the protocol client-side with **ViaFabricPlus**. No per-version build is involve
   image fetch it from Modrinth on first run. Without it the bot only joins servers on its own
   version (`-Pwith_viafabricplus=false` / `CLEF_VIAFABRICPLUS=false` opt out).
 - **Evidence.** `servers[]` in [`minecraft-versions.json`](minecraft-versions.json) lists all 51
-  official releases from 1.12.2 to 26.2; an entry is `verified` only after
-  `scripts/verify_versions.sh` actually joined a real vanilla server of that exact release.
+  official releases from 1.12.2 to 26.2, and **all 51 are `verified`** — each was joined for real,
+  by one 26.2 client, against a vanilla server of that exact release. Twice over: once naming the
+  protocol explicitly, and once with `serverVersion: auto`, which pings the server and picks the
+  protocol itself (`autoDetect` in the matrix). Nothing in that table is inferred from a protocol
+  table; `scripts/verify_versions.sh --all` reproduces it.
 - **Limitation.** Translation does not load that version's *mods* — see axis 2.
 
 ### 2. Native client builds — per-version mods

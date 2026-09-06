@@ -32,8 +32,11 @@ def main():
             continue
         entry.pop("error", None)
         if r.get("ok"):
+            # An explicit-protocol run says nothing about auto-detection, so it must not erase a
+            # previous --auto run's evidence. Only ever raise this flag, never lower it.
+            auto = bool(report.get("auto")) or bool(entry.get("autoDetect"))
             entry.update({"status": "verified", "verifiedOn": today, "client": report["client"],
-                          "selected": r.get("selected"), "autoDetect": bool(report.get("auto"))})
+                          "selected": r.get("selected"), "autoDetect": auto})
         else:
             entry.update({"status": "failed", "failedOn": today, "client": report["client"],
                           "error": r.get("error", "unknown")})
