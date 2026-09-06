@@ -1,8 +1,7 @@
 package dev.mezzo.clef;
 
 import dev.mezzo.clef.config.ClefConfig;
-import net.fabricmc.api.ModInitializer;
-import net.fabricmc.loader.api.FabricLoader;
+import dev.mezzo.clef.platform.Platform;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -12,8 +11,11 @@ import java.nio.file.Path;
  * Common (main) entrypoint. Kept tiny on purpose: everything client-side lives in
  * {@link ClefClient}. This just owns the logger and the lazily-loaded config so any
  * subsystem can grab them without a circular dependency.
+ *
+ * <p>Loader-neutral: the loader's own entrypoint installs a {@link Platform} and then calls
+ * {@link #init()}, so this class never names Fabric or NeoForge types.
  */
-public final class MezzoClef implements ModInitializer {
+public final class MezzoClef {
 
     public static final String MOD_ID = "mezzoclef";
     // Log4j2 rather than SLF4J deliberately: Minecraft only put SLF4J on the classpath in 1.17,
@@ -24,8 +26,8 @@ public final class MezzoClef implements ModInitializer {
 
     private static volatile ClefConfig config;
 
-    @Override
-    public void onInitialize() {
+    /** Shared init, invoked by whichever loader entrypoint is in play. */
+    public static void init() {
         LOG.info("MezzoSopranoClef common init — headless bot core loading.");
         config(); // force-load + write defaults early so the file exists for the user
     }
@@ -45,10 +47,10 @@ public final class MezzoClef implements ModInitializer {
     }
 
     public static Path configPath() {
-        return FabricLoader.getInstance().getConfigDir().resolve("mezzoclef.json");
+        return Platform.get().configDir().resolve("mezzoclef.json");
     }
 
     public static Path dataDir() {
-        return FabricLoader.getInstance().getGameDir().resolve("mezzoclef");
+        return Platform.get().gameDir().resolve("mezzoclef");
     }
 }

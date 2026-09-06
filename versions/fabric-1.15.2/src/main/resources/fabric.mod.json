@@ -12,13 +12,13 @@
   "environment": "client",
   "entrypoints": {
     "main": [
-      "dev.mezzo.clef.MezzoClef"
+      "dev.mezzo.clef.fabric.FabricMain"
     ],
     "client": [
       "dev.mezzo.clef.ClefClient"
     ],
     "preLaunch": [
-      "dev.mezzo.clef.ClefPreLaunch"
+      "dev.mezzo.clef.fabric.FabricPreLaunch"
     ]
   },
   "mixins": [

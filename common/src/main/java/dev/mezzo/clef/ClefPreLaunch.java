@@ -3,7 +3,6 @@ package dev.mezzo.clef;
 import dev.mezzo.clef.config.ClefConfig;
 import dev.mezzo.clef.headless.HeadlessController;
 import dev.mezzo.clef.version.VersionCapabilities;
-import net.fabricmc.loader.api.entrypoint.PreLaunchEntrypoint;
 
 import java.util.Locale;
 
@@ -14,11 +13,13 @@ import java.util.Locale;
  *
  * Importantly we do NOT touch any Minecraft client classes here — that would trip the
  * classloader far too early.
+ *
+ * <p>Loader-neutral: the loader's pre-launch hook installs a platform and then calls {@link #run()}.
  */
-public final class ClefPreLaunch implements PreLaunchEntrypoint {
+public final class ClefPreLaunch {
 
-    @Override
-    public void onPreLaunch() {
+    /** Shared pre-launch work, invoked by whichever loader entrypoint is in play. */
+    public static void run() {
         ClefConfig cfg = MezzoClef.config();
         HeadlessController hc = HeadlessController.get();
         hc.setHeadless(cfg.headless);

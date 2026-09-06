@@ -3,7 +3,7 @@ package dev.mezzo.clef.version;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import dev.mezzo.clef.MezzoClef;
-import net.fabricmc.loader.api.FabricLoader;
+import dev.mezzo.clef.platform.Platform;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -82,7 +82,7 @@ public final class ProtocolBridge {
     private void resolve() {
         if (resolved) return;
         resolved = true;
-        if (!FabricLoader.getInstance().isModLoaded(MOD_ID)) {
+        if (!Platform.get().isModLoaded(MOD_ID)) {
             failure = "ViaFabricPlus is not installed — only servers on the client's own version ("
                     + nativeMinecraftVersion() + ") can be joined";
             MezzoClef.LOG.info("ViaFabricPlus not present; multi-version server support disabled.");
@@ -118,9 +118,7 @@ public final class ProtocolBridge {
 
     /** The Minecraft version this client was built for (what "native" means). */
     public static String nativeMinecraftVersion() {
-        return FabricLoader.getInstance().getModContainer("minecraft")
-                .map(c -> c.getMetadata().getVersion().getFriendlyString())
-                .orElse("unknown");
+        return Platform.get().minecraftVersion();
     }
 
     /**

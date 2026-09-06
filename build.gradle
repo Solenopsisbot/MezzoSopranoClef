@@ -16,7 +16,7 @@ plugins {
 // ---------------------------------------------------------------------------
 sourceSets {
     main {
-        java.srcDirs = ['src/main/java', 'common/src/main/java']
+        java.srcDirs = ['src/main/java', 'common/src/main/java', 'fabric-common/src/main/java']
         resources.srcDirs = ['src/main/resources', 'common/src/main/resources']
     }
 }
