@@ -1,4 +1,8 @@
 pluginManagement {
+    plugins {
+        id 'net.fabricmc.fabric-loom' version '1.17.20'
+        id 'fabric-loom' version '1.17.20'
+    }
     repositories {
         maven { name = 'Fabric'; url = 'https://maven.fabricmc.net/' }
         gradlePluginPortal()
@@ -7,8 +11,9 @@ pluginManagement {
 }
 
 plugins {
-    // Lets Gradle auto-provision a JDK 21 toolchain on any OS (foojay disco API).
-    // If this version errors on your Gradle, bump it or install JDK 21 manually.
+    // Lets Gradle auto-provision JDK toolchains on any OS (foojay disco API). The matrix needs
+    // several (25 for 26.x, 21 for 1.20.5+, 17 for 1.18-1.20.4, 8 for 1.12-1.16), so this earns
+    // its keep — Gradle fetches whichever a target asks for.
     id 'org.gradle.toolchains.foojay-resolver-convention' version '1.0.0'
 }
 
@@ -18,3 +23,23 @@ rootProject.name = 'MezzoSopranoClef'
 // and launches the headless bot — so end users don't need Gradle/Loom. Kept a separate module so
 // the mod itself stays zero-runtime-dependency.
 include 'launcher'
+
+// ---------------------------------------------------------------------------
+// Native per-version client builds. Each is a real mod jar for that Minecraft release, so
+// version-specific Fabric/Forge mods load alongside the bot. `common/` is shared source.
+// ---------------------------------------------------------------------------
+include 'versions:fabric-1.21.11'
+include 'versions:fabric-1.21.8'
+include 'versions:fabric-1.21.5'
+include 'versions:fabric-1.21.4'
+include 'versions:fabric-1.21.1'
+include 'versions:fabric-1.20.6'
+include 'versions:fabric-1.20.4'
+include 'versions:fabric-1.20.1'
+include 'versions:fabric-1.19.4'
+include 'versions:fabric-1.19.2'
+include 'versions:fabric-1.18.2'
+include 'versions:fabric-1.17.1'
+include 'versions:fabric-1.16.5'
+include 'versions:fabric-1.15.2'
+include 'versions:fabric-1.14.4'

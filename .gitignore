@@ -30,12 +30,10 @@ eclipse/
 *.token
 auth-cache.json
 
-# e2e test artifacts (server jar, world, logs, screenshots, bench output)
-e2e/server/
-e2e/*.log
-e2e/*.png
-e2e/*.out
-e2e/*.pid
+# e2e artifacts: downloaded server jars + worlds, bot logs, screenshots, and the generated
+# verification reports for both the server matrix and the native per-version client matrix.
+# Everything under e2e/ is produced by the scripts; none of it belongs in the repo.
+e2e/
 
 # Run logs + Python probe/benchmark bytecode caches
 logs/

@@ -5,8 +5,9 @@
 #                 -e CLEF_OPTS="-Dmezzoclef.ws.host=0.0.0.0" mezzosopranoclef
 #
 # Minecraft itself is NOT baked into the image (it isn't redistributable). It downloads into the
-# /data volume on first run, exactly like the launcher does on bare metal. Mount a volume so the
-# download (and the bot's config/auth cache) persist across runs.
+# /data volume on first run, exactly like the launcher does on bare metal, and so does
+# ViaFabricPlus (GPL-3.0, fetched from Modrinth rather than bundled). Mount a volume so the
+# downloads (and the bot's config/auth cache) persist across runs.
 
 # Pinned to linux/amd64: Mojang ships LWJGL natives for x86_64 (and macOS), but NOT linux-arm64,
 # so the game can't start on arm64 Linux. On an Apple Silicon host this image runs under emulation
@@ -14,16 +15,16 @@
 
 # --- build stage: produce the launcher jar. Loom downloads MC here only to remap the mod; this
 #     whole stage (and the cached MC) is discarded — the final image carries no Minecraft. ---
-FROM --platform=linux/amd64 eclipse-temurin:21-jdk AS build
+FROM --platform=linux/amd64 eclipse-temurin:25-jdk AS build
 WORKDIR /src
 COPY . .
 RUN ./gradlew :launcher:jar --no-daemon \
     && cp launcher/build/libs/mezzosopranoclef-launcher-*.jar /launcher.jar
 
 # --- runtime stage: a JRE + the self-bootstrapping launcher. ---
-FROM --platform=linux/amd64 eclipse-temurin:21-jre
+FROM --platform=linux/amd64 eclipse-temurin:25-jre
 LABEL org.opencontainers.image.title="MezzoSopranoClef" \
-      org.opencontainers.image.description="Headless, GPU-free Minecraft bot (Fabric 1.21.8)"
+      org.opencontainers.image.description="Headless, GPU-free Minecraft bot (Fabric 26.2 client; joins 1.12.2..26.2 servers via ViaFabricPlus)"
 WORKDIR /bot
 COPY --from=build /launcher.jar /bot/launcher.jar
 

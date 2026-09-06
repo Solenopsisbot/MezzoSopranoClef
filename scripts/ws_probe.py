@@ -120,6 +120,10 @@ def recv_text(s):
 
 _id = 0
 
+# Every {"event": ...} frame we see, in arrival order. `call` drains frames while waiting for its
+# own response, so events would otherwise be lost before anything could assert on them.
+EVENTS_SEEN = []
+
 
 def call(s, cmd, timeout=30, **args):
     global _id
@@ -131,12 +135,33 @@ def call(s, cmd, timeout=30, **args):
         msg = json.loads(recv_text(s))
         if msg.get("event"):
             print(f"[probe] event: {msg['event']} {msg.get('data')}")
+            EVENTS_SEEN.append(msg)
             continue
         if msg.get("id") == mid:
             if not msg.get("ok"):
                 raise RuntimeError(f"{cmd} failed: {msg.get('error')}")
             return msg.get("result")
     raise RuntimeError(f"timeout waiting for response to '{cmd}'")
+
+
+def wait_for_event(s, name, predicate, timeout=30):
+    """Return the first buffered-or-incoming `name` event matching `predicate`, else raise."""
+    for msg in EVENTS_SEEN:
+        if msg.get("event") == name and predicate(msg.get("data") or {}):
+            return msg["data"]
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        s.settimeout(max(1, deadline - time.time()))
+        try:
+            msg = json.loads(recv_text(s))
+        except (socket.timeout, OSError):
+            break
+        if msg.get("event"):
+            print(f"[probe] event: {msg['event']} {msg.get('data')}")
+            EVENTS_SEEN.append(msg)
+            if msg["event"] == name and predicate(msg.get("data") or {}):
+                return msg["data"]
+    raise RuntimeError(f"no '{name}' event matching predicate within {timeout}s")
 
 
 def main():
@@ -168,7 +193,15 @@ def main():
     assert st and st.get("inWorld"), f"bot never entered a world: {st}"
     print(f"[probe] in world at {st['player']} (dim={st['player']['dimension']})")
 
-    names = [p["name"] for p in call(s, "players")]
+    # The player-info packet lands a little after the world does, so poll rather than sample once:
+    # a bare assert here fails intermittently on a slow join even though the bot is fine.
+    deadline = time.time() + 60
+    names = []
+    while time.time() < deadline:
+        names = [p["name"] for p in call(s, "players")]
+        if name in names:
+            break
+        time.sleep(2)
     print(f"[probe] tab-list: {names}")
     assert name in names, f"expected '{name}' in player list {names}"
 
@@ -180,7 +213,15 @@ def main():
         f.write(raw)
     print(f"[probe] screenshot OK backend={shot.get('backend')} bytes={len(raw)} -> {path}")
 
-    call(s, "chat", message="MezzoSopranoClef e2e: PASS")
+    # Chat round-trip. Sending proves the outbound path; the server echoes the message back to
+    # us, so requiring the inbound event proves the receive path too — which on 1.19.2 and older
+    # is a packet mixin rather than a Fabric API event, and is otherwise untested.
+    marker = "MezzoSopranoClef e2e: PASS"
+    assert call(s, "subscribe", events=["chat"]) is not None
+    call(s, "chat", message=marker)
+    got = wait_for_event(s, "chat", lambda d: marker in (d.get("text") or ""), timeout=30)
+    assert got.get("kind") == "chat", f"echoed message had kind={got.get('kind')!r}, want 'chat'"
+    print(f"[probe] chat round-trip OK (sender={got.get('sender')!r})")
     print("[probe] PASS")
     return 0
 

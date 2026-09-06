@@ -237,8 +237,17 @@ class ClefClient:
     def schema(self) -> Dict[str, Any]:
         return self.call("schema")
 
-    def connect_server(self, host: str, port: int = 25565) -> Dict[str, Any]:
-        return self.call("connect", host=host, port=port)
+    def connect_server(self, host: str, port: int = 25565, version: Optional[str] = None) -> Dict[str, Any]:
+        """Join a server. `version` picks the protocol ViaFabricPlus speaks: "auto" (ping and match,
+        the server default), "native", or a release such as "1.12.2"; None uses the bot's config."""
+        args: Dict[str, Any] = {"host": host, "port": port}
+        if version is not None:
+            args["version"] = version
+        return self.call("connect", **args)
+
+    def protocol(self) -> Dict[str, Any]:
+        """ViaFabricPlus state: native version, current target, and every joinable server release."""
+        return self.call("protocol")
 
     def disconnect(self) -> Dict[str, Any]:
         return self.call("disconnect")

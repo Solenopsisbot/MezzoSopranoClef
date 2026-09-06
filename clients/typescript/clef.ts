@@ -236,7 +236,10 @@ export class ClefClient {
   ping() { return this.call("ping"); }
   status() { return this.call("status"); }
   schema() { return this.call("schema"); }
-  connectServer(host: string, port = 25565) { return this.call("connect", { host, port }); }
+  /** Join a server. `version`: "auto" (ping + match, the server default), "native", or a release like "1.12.2". */
+  connectServer(host: string, port = 25565, version?: string) { return this.call("connect", prune({ host, port, version })); }
+  /** ViaFabricPlus state: native version, current target, and every joinable server release. */
+  protocol() { return this.call("protocol"); }
   disconnect() { return this.call("disconnect"); }
   chat(message: string) { return this.call("chat", { message }); }
   look(yaw?: number, pitch?: number) { return this.call("look", prune({ yaw, pitch })); }

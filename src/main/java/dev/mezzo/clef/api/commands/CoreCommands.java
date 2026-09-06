@@ -7,16 +7,16 @@ import dev.mezzo.clef.api.ApiException;
 import dev.mezzo.clef.api.ApiSchema;
 import dev.mezzo.clef.api.CommandDispatcher;
 import dev.mezzo.clef.bot.ServerConnector;
+import dev.mezzo.clef.version.ProtocolBridge;
 import dev.mezzo.clef.config.ClefConfig;
 import dev.mezzo.clef.headless.HeadlessController;
 import dev.mezzo.clef.nav.Navigator;
 import dev.mezzo.clef.screenshot.ScreenshotService;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.screen.TitleScreen;
-import net.minecraft.client.network.PlayerListEntry;
-import net.minecraft.client.session.Session;
-
 import java.util.Base64;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.User;
+import net.minecraft.client.gui.screens.TitleScreen;
+import net.minecraft.client.multiplayer.PlayerInfo;
 
 /** Registers the built-in control-plane commands. Add your own bot behaviours here. */
 public final class CoreCommands {
@@ -97,7 +97,7 @@ public final class CoreCommands {
         });
 
         d.register("status", "bot, world and player status", ctx -> ctx.onMain(() -> {
-            MinecraftClient mc = MinecraftClient.getInstance();
+            Minecraft mc = Minecraft.getInstance();
             HeadlessController hc = HeadlessController.get();
             JsonObject o = new JsonObject();
             o.addProperty("headless", hc.isHeadless());
@@ -105,46 +105,47 @@ public final class CoreCommands {
             o.addProperty("noWindow", hc.isNoWindow());     // true = GLFW null platform (no display server)
             o.addProperty("skippedFrames", hc.skippedFrames());
             o.addProperty("controllers", ctx.server.connectionCount());
-            o.addProperty("singleplayer", mc.isInSingleplayer());
-            o.addProperty("screen", mc.currentScreen != null ? mc.currentScreen.getClass().getSimpleName() : "none");
-            o.addProperty("overlay", mc.getOverlay() != null ? mc.getOverlay().getClass().getSimpleName() : "none");
-            if (mc.getCurrentServerEntry() != null) {
-                o.addProperty("server", mc.getCurrentServerEntry().address);
+            o.addProperty("singleplayer", mc.isLocalServer());
+            o.addProperty("screen", mc.gui.screen() != null ? mc.gui.screen().getClass().getSimpleName() : "none");
+            o.addProperty("overlay", mc.gui.overlay() != null ? mc.gui.overlay().getClass().getSimpleName() : "none");
+            if (mc.getCurrentServer() != null) {
+                o.addProperty("server", mc.getCurrentServer().ip);
             }
-            boolean inWorld = mc.world != null && mc.player != null;
+            boolean inWorld = mc.level != null && mc.player != null;
             o.addProperty("inWorld", inWorld);
             if (inWorld) {
                 JsonObject p = new JsonObject();
                 p.addProperty("x", mc.player.getX());
                 p.addProperty("y", mc.player.getY());
                 p.addProperty("z", mc.player.getZ());
-                p.addProperty("yaw", mc.player.getYaw());
-                p.addProperty("pitch", mc.player.getPitch());
+                p.addProperty("yaw", mc.player.getYRot());
+                p.addProperty("pitch", mc.player.getXRot());
                 p.addProperty("health", mc.player.getHealth());
-                p.addProperty("food", mc.player.getHungerManager().getFoodLevel());
+                p.addProperty("food", mc.player.getFoodData().getFoodLevel());
                 p.addProperty("xpLevel", mc.player.experienceLevel);
                 p.addProperty("xpProgress", mc.player.experienceProgress);
-                p.addProperty("onGround", mc.player.isOnGround());
+                p.addProperty("onGround", mc.player.onGround());
                 p.addProperty("usingItem", mc.player.isUsingItem());
                 p.addProperty("selectedSlot", mc.player.getInventory().getSelectedSlot());
-                var held = mc.player.getMainHandStack();
+                var held = mc.player.getMainHandItem();
                 p.addProperty("heldItem", held.isEmpty() ? "empty"
-                        : net.minecraft.registry.Registries.ITEM.getId(held.getItem()) + " x" + held.getCount());
-                p.addProperty("dimension", mc.world.getRegistryKey().getValue().toString());
+                        : net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(held.getItem()) + " x" + held.getCount());
+                p.addProperty("dimension", mc.level.dimension().identifier().toString());
                 o.add("player", p);
             }
             o.addProperty("navBackend", ctx.server.services.navigator.backend());
             o.addProperty("navActive", ctx.server.services.navigator.isActive());
             o.addProperty("screenshotBackend", ctx.server.services.screenshots.backend());
+            o.add("protocol", ProtocolBridge.get().describeJson());
             return o;
         }));
 
         d.register("auth.status", "current logged-in identity", ctx -> ctx.onMain(() -> {
-            Session s = MinecraftClient.getInstance().getSession();
+            User s = Minecraft.getInstance().getUser();
             JsonObject o = new JsonObject();
-            o.addProperty("username", s.getUsername());
-            o.addProperty("uuid", String.valueOf(s.getUuidOrNull()));
-            o.addProperty("type", s.getAccountType().name());
+            o.addProperty("username", s.getName());
+            o.addProperty("uuid", String.valueOf(s.getProfileId()));
+            o.addProperty("type", (s.getProfileId() == null ? "LEGACY" : "MSA"));
             return o;
         }));
 
@@ -158,20 +159,37 @@ public final class CoreCommands {
             return o;
         });
 
-        d.register("connect", "join a server {host, port}", ctx -> {
+        d.register("connect", "join a server {host, port?, version?} — version: auto|native|1.12.2…", ctx -> {
             String host = ctx.requireStr("host");
             int port = ctx.i("port", 25565);
-            ctx.onMain(() -> { ServerConnector.connect(host, port); return Boolean.TRUE; });
+            String version = ctx.str("version", MezzoClef.config().connection.serverVersion);
+            // Version selection can fail (unknown release, ViaFabricPlus missing); surface that as a
+            // clean error instead of an async log line, so run it synchronously on the client thread.
+            String selected = ctx.onMain(() -> {
+                try {
+                    return ServerConnector.connect(host, port, version);
+                } catch (IllegalArgumentException | IllegalStateException e) {
+                    throw ApiException.badArgs(e.getMessage());
+                }
+            });
             JsonObject o = new JsonObject();
             o.addProperty("connecting", true);
             o.addProperty("host", host);
             o.addProperty("port", port);
+            o.addProperty("version", selected);
+            return o;
+        });
+
+        d.register("protocol", "server-version support: ViaFabricPlus state, native version, current target, all joinable releases", ctx -> {
+            ProtocolBridge bridge = ProtocolBridge.get();
+            JsonObject o = bridge.describeJson();
+            o.add("versions", bridge.supportedVersions());
             return o;
         });
 
         d.register("disconnect", "leave the current world", ctx -> ctx.onMain(() -> {
-            // 1.21.x: disconnect(Screen returnTo, boolean transferring)
-            MinecraftClient.getInstance().disconnect(new TitleScreen(), false);
+            // 26.x: disconnect(Screen returnTo, boolean transferring)
+            Minecraft.getInstance().disconnect(new TitleScreen(), false);
             JsonObject o = new JsonObject();
             o.addProperty("disconnected", true);
             return o;
@@ -180,10 +198,10 @@ public final class CoreCommands {
         d.register("chat", "send chat, or a /command if prefixed with '/' {message}", ctx -> {
             String msg = ctx.requireStr("message");
             return ctx.onMain(() -> {
-                MinecraftClient mc = MinecraftClient.getInstance();
-                if (mc.getNetworkHandler() == null) throw ApiException.notConnected();
-                if (msg.startsWith("/")) mc.getNetworkHandler().sendChatCommand(msg.substring(1));
-                else mc.getNetworkHandler().sendChatMessage(msg);
+                Minecraft mc = Minecraft.getInstance();
+                if (mc.getConnection() == null) throw ApiException.notConnected();
+                if (msg.startsWith("/")) mc.getConnection().sendCommand(msg.substring(1));
+                else mc.getConnection().sendChat(msg);
                 JsonObject o = new JsonObject();
                 o.addProperty("sent", true);
                 return o;
@@ -194,29 +212,29 @@ public final class CoreCommands {
             float yaw = ctx.has("yaw") ? ctx.f("yaw", 0) : Float.NaN;
             float pitch = ctx.has("pitch") ? ctx.f("pitch", 0) : Float.NaN;
             return ctx.onMain(() -> {
-                MinecraftClient mc = MinecraftClient.getInstance();
+                Minecraft mc = Minecraft.getInstance();
                 if (mc.player == null) throw ApiException.notInWorld();
                 if (!Float.isNaN(yaw)) {
-                    mc.player.setYaw(yaw);
-                    mc.player.setHeadYaw(yaw);
-                    mc.player.setBodyYaw(yaw);
+                    mc.player.setYRot(yaw);
+                    mc.player.setYHeadRot(yaw);
+                    mc.player.setYBodyRot(yaw);
                 }
-                if (!Float.isNaN(pitch)) mc.player.setPitch(pitch);
+                if (!Float.isNaN(pitch)) mc.player.setXRot(pitch);
                 JsonObject o = new JsonObject();
-                o.addProperty("yaw", mc.player.getYaw());
-                o.addProperty("pitch", mc.player.getPitch());
+                o.addProperty("yaw", mc.player.getYRot());
+                o.addProperty("pitch", mc.player.getXRot());
                 return o;
             });
         });
 
         d.register("players", "list tab-list players", ctx -> ctx.onMain(() -> {
-            MinecraftClient mc = MinecraftClient.getInstance();
+            Minecraft mc = Minecraft.getInstance();
             JsonArray arr = new JsonArray();
-            if (mc.getNetworkHandler() != null) {
-                for (PlayerListEntry e : mc.getNetworkHandler().getPlayerList()) {
+            if (mc.getConnection() != null) {
+                for (PlayerInfo e : mc.getConnection().getOnlinePlayers()) {
                     JsonObject p = new JsonObject();
-                    p.addProperty("name", e.getProfile().getName());
-                    p.addProperty("id", e.getProfile().getId().toString());
+                    p.addProperty("name", e.getProfile().name());
+                    p.addProperty("id", e.getProfile().id().toString());
                     p.addProperty("ping", e.getLatency());
                     arr.add(p);
                 }

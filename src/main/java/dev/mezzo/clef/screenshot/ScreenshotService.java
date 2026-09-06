@@ -1,9 +1,13 @@
 package dev.mezzo.clef.screenshot;
 
+import com.mojang.blaze3d.pipeline.RenderTarget;
+import com.mojang.blaze3d.pipeline.TextureTarget;
+import com.mojang.blaze3d.platform.Window;
+import com.mojang.blaze3d.GpuFormat;
 import com.mojang.blaze3d.systems.RenderSystem;
 import dev.mezzo.clef.MezzoClef;
 import dev.mezzo.clef.config.ClefConfig;
-import dev.mezzo.clef.mixin.client.MinecraftClientAccessor;
+import dev.mezzo.clef.mixin.client.GameRendererAccessor;
 import dev.mezzo.clef.mixin.client.WindowAccessor;
 import dev.mezzo.clef.render.ArrayVoxelView;
 import dev.mezzo.clef.render.EntityBox;
@@ -12,21 +16,17 @@ import dev.mezzo.clef.render.RenderCamera;
 import dev.mezzo.clef.render.SnapshotBounds;
 import dev.mezzo.clef.render.SoftwareRaycaster;
 import dev.mezzo.clef.render.WorldSnapshotter;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gl.Framebuffer;
-import net.minecraft.client.gl.SimpleFramebuffer;
-import net.minecraft.client.util.ScreenshotRecorder;
-import net.minecraft.client.util.Window;
-import net.minecraft.client.world.ClientWorld;
-import net.minecraft.entity.Entity;
-import net.minecraft.util.math.Vec3d;
-
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.Screenshot;
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.phys.Vec3;
 
 /**
  * Produces a PNG of the world from an arbitrary position, angle and resolution. Two backends:
@@ -102,7 +102,7 @@ public final class ScreenshotService {
                             int skyTop, int skyBottom) {}
 
     private byte[] captureSoftware(CaptureRequest req) throws Exception {
-        MinecraftClient mc = MinecraftClient.getInstance();
+        Minecraft mc = Minecraft.getInstance();
         CompletableFuture<Snapshot> snapFuture = new CompletableFuture<>();
         long totalStart = System.nanoTime();
         long snapshotStart = totalStart;
@@ -132,8 +132,8 @@ public final class ScreenshotService {
     }
 
     /** Runs on the client thread: resolves the camera and snapshots the surrounding blocks. */
-    private Snapshot buildSnapshot(MinecraftClient mc, CaptureRequest req) {
-        ClientWorld world = mc.world;
+    private Snapshot buildSnapshot(Minecraft mc, CaptureRequest req) {
+        ClientLevel world = mc.level;
         if (world == null) {
             throw new IllegalStateException("not in a world — connect to a server first");
         }
@@ -142,13 +142,13 @@ public final class ScreenshotService {
         if (camEntity == null && !haveFullPos) {
             throw new IllegalStateException("no player/camera entity to derive position from");
         }
-        Vec3d eye = camEntity != null ? camEntity.getEyePos() : new Vec3d(req.x(), req.y(), req.z());
+        Vec3 eye = camEntity != null ? camEntity.getEyePosition() : new Vec3(req.x(), req.y(), req.z());
 
         double x = req.x() != null ? req.x() : eye.x;
         double y = req.y() != null ? req.y() : eye.y;
         double z = req.z() != null ? req.z() : eye.z;
-        float yaw = req.yaw() != null ? req.yaw() : (camEntity != null ? camEntity.getYaw() : 0f);
-        float pitch = req.pitch() != null ? req.pitch() : (camEntity != null ? camEntity.getPitch() : 0f);
+        float yaw = req.yaw() != null ? req.yaw() : (camEntity != null ? camEntity.getYRot() : 0f);
+        float pitch = req.pitch() != null ? req.pitch() : (camEntity != null ? camEntity.getXRot() : 0f);
 
         int width = clamp(req.width() != null ? req.width() : config.screenshot.defaultWidth,
                 1, config.screenshot.maxWidth);
@@ -161,7 +161,7 @@ public final class ScreenshotService {
         ArrayVoxelView view = WorldSnapshotter.snapshotBlocks(world, x, y, z, radius);
         List<EntityBox> entities = WorldSnapshotter.snapshotEntities(
                 world, camEntity, x, y, z, radius, Math.max(0, config.screenshot.maxEntities));
-        int sky = WorldSnapshotter.skyColor(world, new Vec3d(x, y, z));
+        int sky = WorldSnapshotter.skyColor(world, new Vec3(x, y, z));
         RenderCamera cam = new RenderCamera(x, y, z, yaw, pitch, fov, width, height, radius);
         return new Snapshot(cam, view, entities, sky, lightenTowardWhite(sky, 0.35));
     }
@@ -177,7 +177,7 @@ public final class ScreenshotService {
             throw new IllegalStateException("a GL screenshot is already in progress (backend is not reentrant)");
         }
         try {
-            MinecraftClient mc = MinecraftClient.getInstance();
+            Minecraft mc = Minecraft.getInstance();
             CompletableFuture<byte[]> out = new CompletableFuture<>();
             long start = System.nanoTime();
             mc.execute(() -> renderGl(mc, req, out));
@@ -189,12 +189,12 @@ public final class ScreenshotService {
         }
     }
 
-    private void renderGl(MinecraftClient mc, CaptureRequest req, CompletableFuture<byte[]> out) {
+    private void renderGl(Minecraft mc, CaptureRequest req, CompletableFuture<byte[]> out) {
         if (!RenderSystem.isOnRenderThread()) {
             out.completeExceptionally(new IllegalStateException("GL capture not on render thread"));
             return;
         }
-        if (mc.world == null) {
+        if (mc.level == null) {
             out.completeExceptionally(new IllegalStateException("not in a world"));
             return;
         }
@@ -204,11 +204,11 @@ public final class ScreenshotService {
             return;
         }
 
-        double x = req.x() != null ? req.x() : cam.getEyePos().x;
-        double y = req.y() != null ? req.y() : cam.getEyePos().y;
-        double z = req.z() != null ? req.z() : cam.getEyePos().z;
-        float yaw = req.yaw() != null ? req.yaw() : cam.getYaw();
-        float pitch = req.pitch() != null ? req.pitch() : cam.getPitch();
+        double x = req.x() != null ? req.x() : cam.getEyePosition().x;
+        double y = req.y() != null ? req.y() : cam.getEyePosition().y;
+        double z = req.z() != null ? req.z() : cam.getEyePosition().z;
+        float yaw = req.yaw() != null ? req.yaw() : cam.getYRot();
+        float pitch = req.pitch() != null ? req.pitch() : cam.getXRot();
         int width = clamp(req.width() != null ? req.width() : config.screenshot.defaultWidth, 1, config.screenshot.maxWidth);
         int height = clamp(req.height() != null ? req.height() : config.screenshot.defaultHeight, 1, config.screenshot.maxHeight);
         try {
@@ -221,26 +221,26 @@ public final class ScreenshotService {
 
         Window window = mc.getWindow();
         WindowAccessor winAcc = (WindowAccessor) (Object) window;
-        MinecraftClientAccessor mcAcc = (MinecraftClientAccessor) (Object) mc;
-        int oldW = window.getFramebufferWidth();
-        int oldH = window.getFramebufferHeight();
-        int oldFov = mc.options.getFov().getValue();
-        Framebuffer oldFb = mc.getFramebuffer();
+        GameRendererAccessor grAcc = (GameRendererAccessor) (Object) mc.gameRenderer;
+        int oldW = window.getWidth();
+        int oldH = window.getHeight();
+        int oldFov = mc.options.fov().get();
+        RenderTarget oldFb = mc.gameRenderer.mainRenderTarget();
 
-        SimpleFramebuffer fb = new SimpleFramebuffer("clef-screenshot", width, height, true);
+        TextureTarget fb = new TextureTarget("clef-screenshot", width, height, true, GpuFormat.RGBA8_UNORM);
         ACTIVE_OVERRIDE = new CameraOverride(x, y, z, yaw, pitch);
         try {
-            mc.options.getFov().setValue((int) fov);
+            mc.options.fov().set((int) fov);
             winAcc.clef$setFramebufferWidth(width);
             winAcc.clef$setFramebufferHeight(height);
-            mcAcc.clef$setFramebuffer(fb);
+            grAcc.clef$setMainRenderTarget(fb);
 
-            mc.gameRenderer.renderWorld(mc.getRenderTickCounter());
+            mc.gameRenderer.renderLevel(mc.getDeltaTracker());
 
-            ScreenshotRecorder.takeScreenshot(fb, image -> {
+            Screenshot.takeScreenshot(fb, image -> {
                 try {
                     Path tmp = Files.createTempFile("clef-shot-", ".png");
-                    image.writeTo(tmp);
+                    image.writeToFile(tmp);
                     byte[] bytes = Files.readAllBytes(tmp);
                     Files.deleteIfExists(tmp);
                     out.complete(bytes);
@@ -248,17 +248,17 @@ public final class ScreenshotService {
                     out.completeExceptionally(t);
                 } finally {
                     image.close();
-                    fb.delete();
+                    fb.destroyBuffers();
                 }
             });
         } finally {
             // Safe to restore now — takeScreenshot captured `fb`; it's deleted in the consumer.
             ACTIVE_OVERRIDE = null;
-            mcAcc.clef$setFramebuffer(oldFb);
+            grAcc.clef$setMainRenderTarget(oldFb);
             winAcc.clef$setFramebufferWidth(oldW);
             winAcc.clef$setFramebufferHeight(oldH);
             try {
-                mc.options.getFov().setValue(oldFov);
+                mc.options.fov().set(oldFov);
             } catch (Exception e) {
                 MezzoClef.LOG.debug("Could not restore FOV after GL capture: {}", e.toString());
             }
@@ -284,10 +284,10 @@ public final class ScreenshotService {
         return Math.max(1.0f, Math.min(179.0f, fov));
     }
 
-    private int clampRadiusToSnapshotBudget(ClientWorld world, double x, double y, double z, int radius) {
+    private int clampRadiusToSnapshotBudget(ClientLevel world, double x, double y, double z, int radius) {
         int budget = Math.max(1, config.screenshot.maxSnapshotBlocks);
-        int worldBottom = world.getBottomY();
-        int worldTop = world.getBottomY() + world.getHeight() - 1;
+        int worldBottom = world.getMinY();
+        int worldTop = world.getMinY() + world.getHeight() - 1;
         int bx = (int) Math.floor(x), by = (int) Math.floor(y), bz = (int) Math.floor(z);
         while (radius > 8) {
             SnapshotBounds b = SnapshotBounds.compute(bx, by, bz, radius, worldBottom, worldTop);

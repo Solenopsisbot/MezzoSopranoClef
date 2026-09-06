@@ -20,15 +20,14 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.screen.AccessibilityOnboardingScreen;
-import net.minecraft.client.gui.screen.TitleScreen;
-import net.minecraft.client.gui.screen.ingame.HandledScreen;
-import net.minecraft.client.network.PlayerListEntry;
-import net.minecraft.entity.Entity;
-import net.minecraft.entity.EntityType;
-import net.minecraft.sound.SoundCategory;
-
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.AccessibilityOnboardingScreen;
+import net.minecraft.client.gui.screens.TitleScreen;
+import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
+import net.minecraft.client.multiplayer.PlayerInfo;
+import net.minecraft.sounds.SoundSource;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EntityType;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.Executors;
@@ -119,7 +118,7 @@ public final class ClefClient implements ClientModInitializer {
                 }
             });
 
-            MinecraftClient.getInstance().execute(() -> {
+            Minecraft.getInstance().execute(() -> {
                 try {
                     SessionInjector.inject(session);
                     authReady = true;
@@ -166,7 +165,7 @@ public final class ClefClient implements ClientModInitializer {
         tokenRefresher.scheduleAtFixedRate(() -> {
             try {
                 MinecraftSession refreshed = am.refreshSession();
-                MinecraftClient.getInstance().execute(() -> {
+                Minecraft.getInstance().execute(() -> {
                     try {
                         SessionInjector.inject(refreshed);
                     } catch (Throwable t) {
@@ -196,7 +195,7 @@ public final class ClefClient implements ClientModInitializer {
             if (control == null) return;
             JsonObject d = new JsonObject();
             d.addProperty("text", message.getString());
-            if (sender != null) d.addProperty("sender", sender.getName());
+            if (sender != null) d.addProperty("sender", sender.name());
             d.addProperty("kind", "chat");
             control.emitEvent("chat", d);
         });
@@ -214,13 +213,13 @@ public final class ClefClient implements ClientModInitializer {
     }
 
     /** Per-tick driver: actuation, world-state events, then deferred auto-connect. */
-    private void onClientTick(MinecraftClient mc) {
+    private void onClientTick(Minecraft mc) {
         // Mute audio cleanly (master volume -> 0) once options exist. We do NOT cancel the sound
         // engine — doing so crashes gameplay sounds (block breaks etc.) on a half-initialised
         // OpenAL. Volume 0 = silent, no crash. Headless Linux disables audio on its own anyway.
         if (!audioMuted && HeadlessController.get().isMuteAudio() && mc.options != null) {
             try {
-                mc.options.getSoundVolumeOption(SoundCategory.MASTER).setValue(0.0);
+                mc.options.getSoundSourceOptionInstance(SoundSource.MASTER).set(0.0);
             } catch (Throwable ignored) {
             }
             audioMuted = true;
@@ -236,8 +235,8 @@ public final class ClefClient implements ClientModInitializer {
         // Without this, auto-connect never fires on a fresh run dir.
         if (mc.options != null && mc.options.onboardAccessibility) {
             mc.options.onboardAccessibility = false;
-            if (mc.currentScreen instanceof AccessibilityOnboardingScreen) {
-                mc.setScreen(new TitleScreen());
+            if (mc.gui.screen() instanceof AccessibilityOnboardingScreen) {
+                mc.gui.setScreen(new TitleScreen());
             }
         }
 
@@ -245,13 +244,13 @@ public final class ClefClient implements ClientModInitializer {
         if (!MezzoClef.config().connection.autoConnect) return;
         if (connectStarted.get()) return;
 
-        if (mc.world != null) {                 // already in a world
+        if (mc.level != null) {                 // already in a world
             connectStarted.set(true);
             return;
         }
         // Ready = the resource reload finished (no overlay) and SOME menu screen is up. Don't
         // require TitleScreen specifically — first launch may sit on the onboarding screen.
-        if (mc.getOverlay() != null || mc.currentScreen == null) return;
+        if (mc.gui.overlay() != null || mc.gui.screen() == null) return;
         if (++warmupTicks < 20) return;          // ~1s of grace
 
         if (connectStarted.compareAndSet(false, true)) {
@@ -270,15 +269,15 @@ public final class ClefClient implements ClientModInitializer {
      * death, respawn, a throttled tick snapshot, player join/leave, and nearby entitySpawn/remove.
      * The expensive sources (tick snapshot, entity diff) only run when something is subscribed.
      */
-    private void emitWorldEvents(MinecraftClient mc) {
+    private void emitWorldEvents(Minecraft mc) {
         if (control == null) return;
 
         // screen open/close (handy for UI automation — react to a chest/furnace/trade opening)
-        String screen = mc.currentScreen != null ? mc.currentScreen.getClass().getSimpleName() : "none";
+        String screen = mc.gui.screen() != null ? mc.gui.screen().getClass().getSimpleName() : "none";
         if (!screen.equals(lastScreen)) {
             JsonObject d = new JsonObject();
             d.addProperty("screen", screen);
-            if (!"none".equals(screen) && mc.currentScreen instanceof HandledScreen) {
+            if (!"none".equals(screen) && mc.gui.screen() instanceof AbstractContainerScreen) {
                 control.emitEvent("screenOpen", d);
             } else if ("none".equals(screen)) {
                 control.emitEvent("screenClose", d);
@@ -286,11 +285,11 @@ public final class ClefClient implements ClientModInitializer {
             lastScreen = screen;
         }
 
-        if (mc.player == null || mc.world == null) return;
+        if (mc.player == null || mc.level == null) return;
         eventTickCounter++;
 
         float hp = mc.player.getHealth();
-        int food = mc.player.getHungerManager().getFoodLevel();
+        int food = mc.player.getFoodData().getFoodLevel();
         float prevHp = lastHealth;
         if (hp != lastHealth || food != lastFood) {
             JsonObject d = new JsonObject();
@@ -313,7 +312,7 @@ public final class ClefClient implements ClientModInitializer {
             control.emitEvent("death", new JsonObject());
             if (MezzoClef.config().connection.autoRespawn) {
                 try {
-                    mc.player.requestRespawn();
+                    mc.player.respawn();
                 } catch (Throwable t) {
                     MezzoClef.LOG.warn("Auto-respawn failed: {}", t.toString());
                 }
@@ -329,19 +328,19 @@ public final class ClefClient implements ClientModInitializer {
             d.addProperty("x", mc.player.getX());
             d.addProperty("y", mc.player.getY());
             d.addProperty("z", mc.player.getZ());
-            d.addProperty("yaw", mc.player.getYaw());
-            d.addProperty("pitch", mc.player.getPitch());
+            d.addProperty("yaw", mc.player.getYRot());
+            d.addProperty("pitch", mc.player.getXRot());
             d.addProperty("health", hp);
             d.addProperty("food", food);
-            d.addProperty("dimension", mc.world.getRegistryKey().getValue().toString());
+            d.addProperty("dimension", mc.level.dimension().identifier().toString());
             control.emitEvent("tick", d);
         }
 
         // player join/leave (tab-list diff)
-        if (eventTickCounter % 10 == 0 && mc.getNetworkHandler() != null) {
+        if (eventTickCounter % 10 == 0 && mc.getConnection() != null) {
             Set<String> current = new HashSet<>();
-            for (PlayerListEntry e : mc.getNetworkHandler().getPlayerList()) {
-                current.add(e.getProfile().getName());
+            for (PlayerInfo e : mc.getConnection().getOnlinePlayers()) {
+                current.add(e.getProfile().name());
             }
             if (lastPlayers != null) {
                 for (String name : current) {
@@ -368,8 +367,8 @@ public final class ClefClient implements ClientModInitializer {
             Set<Integer> current = new HashSet<>();
             java.util.Map<Integer, Entity> byId = new java.util.HashMap<>();
             double r2 = ENTITY_EVENT_RADIUS * ENTITY_EVENT_RADIUS;
-            for (Entity e : mc.world.getEntities()) {
-                if (e == mc.player || e.squaredDistanceTo(mc.player) > r2) continue;
+            for (Entity e : mc.level.entitiesForRendering()) {
+                if (e == mc.player || e.distanceToSqr(mc.player) > r2) continue;
                 current.add(e.getId());
                 byId.put(e.getId(), e);
             }
@@ -379,7 +378,7 @@ public final class ClefClient implements ClientModInitializer {
                         Entity e = byId.get(id);
                         JsonObject d = new JsonObject();
                         d.addProperty("id", id);
-                        d.addProperty("type", EntityType.getId(e.getType()).toString());
+                        d.addProperty("type", EntityType.getKey(e.getType()).toString());
                         d.addProperty("x", e.getX());
                         d.addProperty("y", e.getY());
                         d.addProperty("z", e.getZ());

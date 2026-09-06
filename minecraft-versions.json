@@ -1,0 +1,515 @@
+{
+  "_comment": [
+    "MezzoSopranoClef supports Minecraft versions in TWO distinct ways. Do not conflate them.",
+    "",
+    "1) `servers` \u2014 which SERVER versions the bot can join. One client build talks to all of them by",
+    "   translating the protocol client-side with ViaFabricPlus. `status` here is filled in by",
+    "   scripts/update_version_matrix.py from a real scripts/verify_versions.sh run:",
+    "     verified  - a real vanilla server of this exact release was joined (tab list + screenshot)",
+    "     expected  - shares a protocol with a verified neighbour; not itself run yet",
+    "     failed    - the last matrix run could not join it (see `error`)",
+    "   `serverJava` is the JDK major that release's vanilla server needs (for the test harness).",
+    "",
+    "2) `nativeClients` \u2014 which CLIENT versions have their own real mod build. This is what makes",
+    "   VERSION-SPECIFIC MODS work: a 1.20.1 Fabric mod only loads next to a 1.20.1 build of the bot.",
+    "   Protocol translation cannot provide this; each entry is a genuine port. `status`:",
+    "     runtime-verified - booted and joined a real server of that version in this repo",
+    "     jar-built        - compiles against that release and produces a remapped mod jar; not yet booted",
+    "   `noGl` is whether that target can boot with NO OpenGL context at all. Where false the bot is",
+    "   still headless (the world/GUI draw is skipped) but needs a real GL context \u2014 a hidden window,",
+    "   or Xvfb/Mesa on a bare server \u2014 because that release has no stub-able Blaze3D device."
+  ],
+  "client": {
+    "minecraft": "26.2",
+    "loader": "fabric",
+    "java": 25,
+    "mappings": "official (unobfuscated; no Yarn since 26.1)",
+    "protocolTranslator": "viafabricplus 4.6.3",
+    "pathfinder": "baritone 1.19.0"
+  },
+  "policy": "Server reach and native client builds are tracked separately. A server release is only marked verified after a real join; a native client target is only listed after it actually compiles and produces a mod jar. Nothing is listed on intent alone.",
+  "servers": [
+    {
+      "version": "1.12.2",
+      "serverJava": 8,
+      "status": "verified",
+      "verifiedOn": "2026-09-06",
+      "client": "26.2",
+      "selected": "1.12.2",
+      "autoDetect": false
+    },
+    {
+      "version": "1.13",
+      "serverJava": 8,
+      "status": "expected"
+    },
+    {
+      "version": "1.13.1",
+      "serverJava": 8,
+      "status": "expected"
+    },
+    {
+      "version": "1.13.2",
+      "serverJava": 8,
+      "status": "verified",
+      "verifiedOn": "2026-09-06",
+      "client": "26.2",
+      "selected": "1.13.2",
+      "autoDetect": false
+    },
+    {
+      "version": "1.14",
+      "serverJava": 8,
+      "status": "expected"
+    },
+    {
+      "version": "1.14.1",
+      "serverJava": 8,
+      "status": "expected"
+    },
+    {
+      "version": "1.14.2",
+      "serverJava": 8,
+      "status": "expected"
+    },
+    {
+      "version": "1.14.3",
+      "serverJava": 8,
+      "status": "expected"
+    },
+    {
+      "version": "1.14.4",
+      "serverJava": 8,
+      "status": "verified",
+      "verifiedOn": "2026-09-06",
+      "client": "26.2",
+      "selected": "1.14.4",
+      "autoDetect": false
+    },
+    {
+      "version": "1.15",
+      "serverJava": 8,
+      "status": "expected"
+    },
+    {
+      "version": "1.15.1",
+      "serverJava": 8,
+      "status": "expected"
+    },
+    {
+      "version": "1.15.2",
+      "serverJava": 8,
+      "status": "verified",
+      "verifiedOn": "2026-09-06",
+      "client": "26.2",
+      "selected": "1.15.2",
+      "autoDetect": false
+    },
+    {
+      "version": "1.16",
+      "serverJava": 8,
+      "status": "expected"
+    },
+    {
+      "version": "1.16.1",
+      "serverJava": 8,
+      "status": "expected"
+    },
+    {
+      "version": "1.16.2",
+      "serverJava": 8,
+      "status": "expected"
+    },
+    {
+      "version": "1.16.3",
+      "serverJava": 8,
+      "status": "expected"
+    },
+    {
+      "version": "1.16.4",
+      "serverJava": 8,
+      "status": "expected"
+    },
+    {
+      "version": "1.16.5",
+      "serverJava": 8,
+      "status": "verified",
+      "failedOn": "2026-09-06",
+      "client": "26.2",
+      "verifiedOn": "2026-09-06",
+      "selected": "1.16.4-1.16.5",
+      "autoDetect": false
+    },
+    {
+      "version": "1.17",
+      "serverJava": 16,
+      "status": "expected"
+    },
+    {
+      "version": "1.17.1",
+      "serverJava": 16,
+      "status": "verified",
+      "verifiedOn": "2026-09-06",
+      "client": "26.2",
+      "selected": "1.17.1",
+      "autoDetect": false
+    },
+    {
+      "version": "1.18",
+      "serverJava": 17,
+      "status": "expected"
+    },
+    {
+      "version": "1.18.1",
+      "serverJava": 17,
+      "status": "expected"
+    },
+    {
+      "version": "1.18.2",
+      "serverJava": 17,
+      "status": "verified",
+      "verifiedOn": "2026-09-06",
+      "client": "26.2",
+      "selected": "1.18.2",
+      "autoDetect": false
+    },
+    {
+      "version": "1.19",
+      "serverJava": 17,
+      "status": "expected"
+    },
+    {
+      "version": "1.19.1",
+      "serverJava": 17,
+      "status": "expected"
+    },
+    {
+      "version": "1.19.2",
+      "serverJava": 17,
+      "status": "expected"
+    },
+    {
+      "version": "1.19.3",
+      "serverJava": 17,
+      "status": "expected"
+    },
+    {
+      "version": "1.19.4",
+      "serverJava": 17,
+      "status": "verified",
+      "verifiedOn": "2026-09-06",
+      "client": "26.2",
+      "selected": "1.19.4",
+      "autoDetect": false
+    },
+    {
+      "version": "1.20",
+      "serverJava": 17,
+      "status": "expected"
+    },
+    {
+      "version": "1.20.1",
+      "serverJava": 17,
+      "status": "verified",
+      "failedOn": "2026-09-06",
+      "client": "26.2",
+      "verifiedOn": "2026-09-06",
+      "selected": "1.20-1.20.1",
+      "autoDetect": false
+    },
+    {
+      "version": "1.20.2",
+      "serverJava": 17,
+      "status": "expected"
+    },
+    {
+      "version": "1.20.3",
+      "serverJava": 17,
+      "status": "expected"
+    },
+    {
+      "version": "1.20.4",
+      "serverJava": 17,
+      "status": "verified",
+      "failedOn": "2026-09-06",
+      "client": "26.2",
+      "verifiedOn": "2026-09-06",
+      "selected": "1.20.3-1.20.4",
+      "autoDetect": false
+    },
+    {
+      "version": "1.20.5",
+      "serverJava": 21,
+      "status": "expected"
+    },
+    {
+      "version": "1.20.6",
+      "serverJava": 21,
+      "status": "verified",
+      "failedOn": "2026-09-06",
+      "client": "26.2",
+      "verifiedOn": "2026-09-06",
+      "selected": "1.20.5-1.20.6",
+      "autoDetect": false
+    },
+    {
+      "version": "1.21",
+      "serverJava": 21,
+      "status": "expected"
+    },
+    {
+      "version": "1.21.1",
+      "serverJava": 21,
+      "status": "verified",
+      "failedOn": "2026-09-06",
+      "client": "26.2",
+      "verifiedOn": "2026-09-06",
+      "selected": "1.21-1.21.1",
+      "autoDetect": false
+    },
+    {
+      "version": "1.21.2",
+      "serverJava": 21,
+      "status": "expected"
+    },
+    {
+      "version": "1.21.3",
+      "serverJava": 21,
+      "status": "expected"
+    },
+    {
+      "version": "1.21.4",
+      "serverJava": 21,
+      "status": "verified",
+      "verifiedOn": "2026-09-06",
+      "client": "26.2",
+      "selected": "1.21.4",
+      "autoDetect": false
+    },
+    {
+      "version": "1.21.5",
+      "serverJava": 21,
+      "status": "expected"
+    },
+    {
+      "version": "1.21.6",
+      "serverJava": 21,
+      "status": "expected"
+    },
+    {
+      "version": "1.21.7",
+      "serverJava": 21,
+      "status": "expected"
+    },
+    {
+      "version": "1.21.8",
+      "serverJava": 21,
+      "status": "verified",
+      "failedOn": "2026-09-06",
+      "client": "26.2",
+      "verifiedOn": "2026-09-06",
+      "selected": "1.21.7-1.21.8",
+      "autoDetect": false
+    },
+    {
+      "version": "1.21.9",
+      "serverJava": 21,
+      "status": "expected"
+    },
+    {
+      "version": "1.21.10",
+      "serverJava": 21,
+      "status": "expected"
+    },
+    {
+      "version": "1.21.11",
+      "serverJava": 21,
+      "status": "verified",
+      "verifiedOn": "2026-09-06",
+      "client": "26.2",
+      "selected": "1.21.11",
+      "autoDetect": false
+    },
+    {
+      "version": "26.1",
+      "serverJava": 25,
+      "status": "verified",
+      "failedOn": "2026-09-06",
+      "client": "26.2",
+      "verifiedOn": "2026-09-06",
+      "selected": "26.1-26.1.2",
+      "autoDetect": false
+    },
+    {
+      "version": "26.1.1",
+      "serverJava": 25,
+      "status": "expected"
+    },
+    {
+      "version": "26.1.2",
+      "serverJava": 25,
+      "status": "expected"
+    },
+    {
+      "version": "26.2",
+      "serverJava": 25,
+      "status": "verified",
+      "verifiedOn": "2026-09-06",
+      "client": "26.2",
+      "selected": "native (26.2)",
+      "autoDetect": false
+    }
+  ],
+  "nativeClients": [
+    {
+      "minecraft": "26.2",
+      "loader": "fabric",
+      "java": 25,
+      "module": "(root project)",
+      "noGl": true,
+      "status": "runtime-verified",
+      "verifiedOn": "2026-09-06"
+    },
+    {
+      "minecraft": "1.21.11",
+      "loader": "fabric",
+      "java": 21,
+      "module": "versions/fabric-1.21.11",
+      "noGl": true,
+      "status": "runtime-verified",
+      "verifiedOn": "2026-09-06"
+    },
+    {
+      "minecraft": "1.21.8",
+      "loader": "fabric",
+      "java": 21,
+      "module": "versions/fabric-1.21.8",
+      "noGl": true,
+      "status": "runtime-verified",
+      "verifiedOn": "2026-09-06"
+    },
+    {
+      "minecraft": "1.21.5",
+      "loader": "fabric",
+      "java": 21,
+      "module": "versions/fabric-1.21.5",
+      "noGl": false,
+      "status": "runtime-verified",
+      "verifiedOn": "2026-09-06"
+    },
+    {
+      "minecraft": "1.21.4",
+      "loader": "fabric",
+      "java": 21,
+      "module": "versions/fabric-1.21.4",
+      "noGl": false,
+      "status": "runtime-verified",
+      "verifiedOn": "2026-09-06"
+    },
+    {
+      "minecraft": "1.21.1",
+      "loader": "fabric",
+      "java": 21,
+      "module": "versions/fabric-1.21.1",
+      "noGl": false,
+      "status": "runtime-verified",
+      "verifiedOn": "2026-09-06"
+    },
+    {
+      "minecraft": "1.20.6",
+      "loader": "fabric",
+      "java": 21,
+      "module": "versions/fabric-1.20.6",
+      "noGl": false,
+      "status": "runtime-verified",
+      "verifiedOn": "2026-09-06"
+    },
+    {
+      "minecraft": "1.20.4",
+      "loader": "fabric",
+      "java": 17,
+      "module": "versions/fabric-1.20.4",
+      "noGl": false,
+      "status": "runtime-verified",
+      "verifiedOn": "2026-09-06"
+    },
+    {
+      "minecraft": "1.20.1",
+      "loader": "fabric",
+      "java": 17,
+      "module": "versions/fabric-1.20.1",
+      "noGl": false,
+      "status": "runtime-verified",
+      "verifiedOn": "2026-09-06"
+    },
+    {
+      "minecraft": "1.19.4",
+      "loader": "fabric",
+      "java": 17,
+      "module": "versions/fabric-1.19.4",
+      "noGl": false,
+      "status": "runtime-verified",
+      "verifiedOn": "2026-09-06"
+    },
+    {
+      "minecraft": "1.19.2",
+      "loader": "fabric",
+      "java": 17,
+      "module": "versions/fabric-1.19.2",
+      "noGl": false,
+      "status": "runtime-verified",
+      "verifiedOn": "2026-09-06"
+    },
+    {
+      "minecraft": "1.18.2",
+      "loader": "fabric",
+      "java": 17,
+      "module": "versions/fabric-1.18.2",
+      "noGl": false,
+      "status": "runtime-verified",
+      "verifiedOn": "2026-09-06"
+    },
+    {
+      "minecraft": "1.17.1",
+      "loader": "fabric",
+      "java": 17,
+      "module": "versions/fabric-1.17.1",
+      "noGl": false,
+      "status": "runtime-verified",
+      "verifiedOn": "2026-09-06"
+    },
+    {
+      "minecraft": "1.16.5",
+      "loader": "fabric",
+      "java": 17,
+      "module": "versions/fabric-1.16.5",
+      "noGl": false,
+      "status": "runtime-verified",
+      "verifiedOn": "2026-09-06"
+    },
+    {
+      "minecraft": "1.15.2",
+      "loader": "fabric",
+      "java": 17,
+      "module": "versions/fabric-1.15.2",
+      "noGl": false,
+      "status": "runtime-verified",
+      "verifiedOn": "2026-09-06"
+    },
+    {
+      "minecraft": "1.14.4",
+      "loader": "fabric",
+      "java": 17,
+      "module": "versions/fabric-1.14.4",
+      "noGl": false,
+      "status": "runtime-verified",
+      "verifiedOn": "2026-09-06"
+    }
+  ],
+  "nativeClientsNotStarted": {
+    "forge": "No Forge target exists. Forge is a different loader (no Fabric Loader API, different entrypoints/events/build plugin), so it is a separate port of the loader-facing layer, not a version bump.",
+    "neoforge": "No NeoForge target exists, for the same reason as Forge.",
+    "1.12.2": "Forge-only, Java 8, and predates Mojang's published mappings (needs MCP/Parchment). The single largest port in the matrix; not attempted.",
+    "fabric<=1.13.2": "1.14.4 is the floor: Mojang first published official mappings for it, and the whole matrix is built against Mojang mappings so common/ can be shared verbatim. Older releases would need a different mapping set (MCP/Parchment) and a separate toolchain."
+  }
+}
