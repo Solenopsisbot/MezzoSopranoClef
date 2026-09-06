@@ -3,6 +3,9 @@ pluginManagement {
         id 'net.fabricmc.fabric-loom' version '1.17.20'
         id 'fabric-loom' version '1.17.20'
         id 'net.neoforged.moddev' version '2.0.146'
+        // Same plugin family, legacy-Forge flavour — so the Forge target reuses ModDevGradle
+        // rather than dragging ForgeGradle into the build.
+        id 'net.neoforged.moddev.legacyforge' version '2.0.146'
     }
     repositories {
         maven { name = 'Fabric'; url = 'https://maven.fabricmc.net/' }
@@ -59,3 +62,9 @@ include 'versions:neoforge-1.21.5'
 include 'versions:neoforge-1.21.4'
 include 'versions:neoforge-1.20.6'
 include 'versions:neoforge-1.20.4'
+
+// ---------------------------------------------------------------------------
+// MinecraftForge. The third loader; 1.20.1 is where the bulk of Forge modpacks live. Shares
+// `versions/mc-1.20.1/` with the Fabric 1.20.1 target.
+// ---------------------------------------------------------------------------
+include 'versions:forge-1.20.1'
