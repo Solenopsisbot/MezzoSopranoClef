@@ -69,12 +69,18 @@ grep -q 'Done (' "$SERVER_DIR/server.log" 2>/dev/null || { echo "[e2e] server st
 echo "[e2e] server is up."
 
 # 3) bot config: offline, auto-connect, software screenshots
+# The control plane gets a per-run token even though it only listens on localhost. A test bot with
+# no token is an open, fully-actuating body that anything else on the machine can drive — which has
+# happened: another agent's runtime found one of these on its default port and walked it across the
+# test world. Localhost is not an authorization boundary on a shared machine.
+CLEF_WS_TOKEN="${CLEF_WS_TOKEN:-$(head -c 18 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=')}"
+export CLEF_WS_TOKEN
 mkdir -p "$ROOT/$CLEF_RUN_DIR/config"
 cat > "$ROOT/$CLEF_RUN_DIR/config/mezzoclef.json" <<EOF
 {
   "auth": { "mode": "offline", "offlineUsername": "$BOT_NAME" },
   "connection": { "autoConnect": true, "serverHost": "127.0.0.1", "serverPort": $MC_PORT, "serverVersion": "$SERVER_VERSION" },
-  "control": { "enabled": true, "host": "127.0.0.1", "port": $WS_PORT, "authToken": "" },
+  "control": { "enabled": true, "host": "127.0.0.1", "port": $WS_PORT, "authToken": "$CLEF_WS_TOKEN" },
   "screenshot": { "backend": "software", "defaultWidth": 640, "defaultHeight": 360, "maxRayDistance": 96 },
   "headless": true,
   "headlessLoopSleepMs": 5

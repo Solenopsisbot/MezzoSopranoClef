@@ -66,6 +66,10 @@ jobs:
           cache-dependency-path: clients/typescript/package-lock.json
       - name: Install dependencies
         run: npm ci
+      # `node --test` transpiles without checking types, so a duplicate identifier (a field and a
+      # method of the same name, say) ran green for as long as nobody called it. Typecheck first.
+      - name: Typecheck
+        run: npm run typecheck
       - name: Test
         run: npm test
 

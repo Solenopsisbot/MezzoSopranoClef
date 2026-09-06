@@ -12,7 +12,8 @@
     "client.InGameHudAccessor",
     "client.BossBarHudAccessor",
     "client.RenderSystemNoGlMixin",
-    "client.SoundDisableMixin"
+    "client.SoundDisableMixin",
+    "client.ClientPlayNetworkHandlerEventsMixin"
   ],
   "injectors": {
     "defaultRequire": 1

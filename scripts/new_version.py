@@ -131,6 +131,14 @@ def main():
         s = s.replace('"fabric-api"', '"fabric"')
     fmj.write_text(s)
 
+    # The donor's VersionCapabilities names the DONOR's release; rewrite it, or the new module
+    # reports the wrong version through ModPlatform.minecraftVersion() and in its preLaunch log.
+    vc = dst / "src/main/java/dev/mezzo/clef/version/VersionCapabilities.java"
+    if vc.exists():
+        v = vc.read_text()
+        v = re.sub(r'MINECRAFT = "[^"]*"', f'MINECRAFT = "{mc}"', v)
+        vc.write_text(v)
+
     mix = dst / "src/main/resources/mezzoclef.mixins.json"
     m = mix.read_text()
     mix.write_text(re.sub(r'"compatibilityLevel": "JAVA_\d+"', f'"compatibilityLevel": "JAVA_{java}"', m))

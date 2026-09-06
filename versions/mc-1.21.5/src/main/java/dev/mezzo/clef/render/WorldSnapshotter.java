@@ -97,7 +97,8 @@ public final class WorldSnapshotter {
     /** Real biome/time-of-day sky tint, falling back to a pleasant default. */
     public static int skyColor(ClientLevel world, Vec3 cameraPos) {
         try {
-            return 0xFF87CEEB;
+            // This release already returns packed RGB.
+            return 0xFF000000 | (world.getSkyColor(cameraPos, 1.0f) & 0xFFFFFF);
         } catch (Throwable t) {
             return 0xFF87CEEB;
         }

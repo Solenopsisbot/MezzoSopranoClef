@@ -12,7 +12,7 @@ package dev.mezzo.clef.version;
 public final class VersionCapabilities {
 
     /** Minecraft release this build targets. */
-    public static final String MINECRAFT = "1.21.5";
+    public static final String MINECRAFT = "1.20.1";
 
     /** True when a stub GPU device can replace the real backend, so no OpenGL context is created. 1.21.5's Blaze3D device predates the shape this bot stubs. */
     public static final boolean SUPPORTS_NO_GL = false;
