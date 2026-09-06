@@ -3,12 +3,10 @@ package dev.mezzo.clef.version;
 /**
  * What this particular Minecraft target can do — the NeoForge 1.21.8 build.
  *
- * <p>Identical to the Fabric 1.21.8 target except for GPU-free booting. NeoForge patches Blaze3D
- * with its own extension interfaces ({@code GpuDeviceExtension}, plus extra methods on
- * {@code RenderPass} and {@code CommandEncoder}), so the stub device written against vanilla's
- * interfaces does not satisfy them and is not shareable between the two loaders. Until a NeoForge
- * stub exists this target runs headless behind a hidden window, exactly like the 1.21.4-and-older
- * Fabric targets do.
+ * <p>Matches the Fabric 1.21.8 target, GPU-free booting included. That stub is not *shared* with
+ * Fabric — NeoForge patches Blaze3D with its own extension interfaces, so the device has to satisfy
+ * more than vanilla's — but it is implemented here, so this target boots with no OpenGL context at
+ * all rather than behind a hidden window.
  */
 public final class VersionCapabilities {
 
@@ -16,7 +14,7 @@ public final class VersionCapabilities {
     public static final String MINECRAFT = "1.21.8";
 
     /** True when a stub GPU device can replace the real backend, so no OpenGL context is created. */
-    public static final boolean SUPPORTS_NO_GL = false;
+    public static final boolean SUPPORTS_NO_GL = true;
 
     private VersionCapabilities() {}
 }

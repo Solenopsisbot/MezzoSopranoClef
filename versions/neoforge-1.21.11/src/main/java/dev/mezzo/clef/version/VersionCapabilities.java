@@ -16,7 +16,7 @@ public final class VersionCapabilities {
     public static final String MINECRAFT = "1.21.11";
 
     /** True when a stub GPU device can replace the real backend, so no OpenGL context is created. */
-    public static final boolean SUPPORTS_NO_GL = false;
+    public static final boolean SUPPORTS_NO_GL = true;
 
     private VersionCapabilities() {}
 }

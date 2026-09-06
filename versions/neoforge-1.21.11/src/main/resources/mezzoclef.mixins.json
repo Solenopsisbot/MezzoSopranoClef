@@ -11,7 +11,9 @@
     "client.CameraMixin",
     "client.InGameHudAccessor",
     "client.BossBarHudAccessor",
-    "client.SoundDisableMixin"
+    "client.SoundDisableMixin",
+    "client.RenderSystemNoGlMixin",
+    "client.NeoForgeLoadingOverlayMixin"
   ],
   "injectors": {
     "defaultRequire": 1

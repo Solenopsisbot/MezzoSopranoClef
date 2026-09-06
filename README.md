@@ -124,9 +124,13 @@ file spells out why): **any Forge target**, 1.12.2, and Fabric 1.13.2 and older.
 NeoForge proved out. 1.14.4 is the floor for a different reason: it is the first release with
 official Mojang mappings, and those are what let `common/` be shared verbatim across the matrix.
 
-**GPU-free booting is Fabric-only.** NeoForge patches Blaze3D with its own extension interfaces, so
-the stub GPU device written against vanilla's cannot satisfy them; the NeoForge target runs headless
-behind a hidden window, like the 1.21.4-and-older Fabric targets.
+**GPU-free booting works on both loaders**, for the releases whose Blaze3D generation has a
+stub-able device: Fabric and NeoForge on 1.21.8 and 1.21.11 (plus 26.2 on Fabric). The stub is
+per-loader rather than per-release, because NeoForge patches Blaze3D with extension interfaces of
+its own — `GpuDeviceExtension`, plus `RenderPass.setViewport` and `CommandEncoder.clearStencilTexture`
+— so one file cannot compile against both. NeoForge also swaps in its own loading overlay, which
+casts the device straight to the concrete `GlDevice`; that target keeps vanilla's overlay when
+GPU-free. Everywhere else the bot is still headless, it just needs a real GL context.
 
 **Chat events differ slightly on old releases**, because the packets do. Fabric API only gained
 client message events in 1.19.3, so 1.19.2 and older read the chat packets directly
