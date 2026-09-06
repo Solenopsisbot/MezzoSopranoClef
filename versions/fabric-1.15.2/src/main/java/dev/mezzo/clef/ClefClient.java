@@ -71,7 +71,7 @@ public final class ClefClient implements ClientModInitializer {
 
         ScreenshotService screenshots = new ScreenshotService(cfg);
         Navigator navigator = new BaritoneNavigator();
-        this.services = new ClefServices(screenshots, navigator, new InputController(), new ActionManager(), new UseController());
+        this.services = ClefServices.standard(cfg);
         ControlServer server = new ControlServer(cfg, services);
         this.control = server;
 

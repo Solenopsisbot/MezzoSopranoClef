@@ -66,7 +66,10 @@ public final class WorldSnapshotter {
         return view;
     }
 
-    /** Nearby entities as colored boxes (so screenshots show players/mobs/items). Skips {@code self}. */
+    /**
+     * Nearby entities as colored boxes (so screenshots show players/mobs/items). Skips {@code self}.
+     * Each box carries its entity id and type so an annotated capture can label what it drew.
+     */
     public static List<EntityBox> snapshotEntities(ClientLevel world, Entity self,
                                                    double cx, double cy, double cz,
                                                    int radius, int maxEntities) {
@@ -76,7 +79,8 @@ public final class WorldSnapshotter {
             if (e == self || !e.isAlive()) continue;
             if (e.distanceToSqr(cx, cy, cz) > r2) continue;
             AABB bb = e.getBoundingBox();
-            boxes.add(new EntityBox(bb.minX, bb.minY, bb.minZ, bb.maxX, bb.maxY, bb.maxZ, colorFor(e)));
+            boxes.add(new EntityBox(bb.minX, bb.minY, bb.minZ, bb.maxX, bb.maxY, bb.maxZ, colorFor(e),
+                    e.getId(), net.minecraft.world.entity.EntityType.getKey(e.getType()).toString()));
             if (boxes.size() >= maxEntities) break;
         }
         return boxes;

@@ -44,14 +44,17 @@ for v in "${VERSIONS[@]}"; do
     task=":versions:${loader}-${mc}:runClient"; rundir="versions/${loader}-${mc}/run"
   fi
   echo "[native] ===== $v (task $task) ====="
-  pkill -f "mezzoclef.headless=true" 2>/dev/null || true
-  pkill -f "server.jar nogui" 2>/dev/null || true
+  # Deliberately no pkill-by-name here: e2e.sh already kills the PIDs it started, and killing by
+  # process name would take out an unrelated Minecraft on the same machine (fixed on main in
+  # "Stop the test harnesses killing other people's Minecraft processes").
   # Wait for the previous target's client JVM to actually exit. pkill only signals it; a client
   # still shutting down while the next one boots means two Minecraft JVMs competing for CPU, and
   # the new one then misses keep-alives and gets dropped by its server ("lost connection: Timed
   # out"). That is what made older targets fail intermittently in long serial runs.
+  # Match only clients launched from THIS checkout, so a wait can never be held up by — or
+  # confused with — somebody else's bot running on the same machine.
   for _ in $(seq 1 60); do
-    pgrep -f "mezzoclef.headless=true" >/dev/null 2>&1 || break
+    pgrep -af "mezzoclef.headless=true" 2>/dev/null | grep -q "$ROOT" || break
     sleep 1
   done
   # Wait for the previous target's server to actually release the port. A blind sleep is not

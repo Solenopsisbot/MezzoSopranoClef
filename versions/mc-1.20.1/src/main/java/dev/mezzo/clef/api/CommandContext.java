@@ -145,4 +145,34 @@ public final class CommandContext {
     public boolean has(String key) {
         return args.has(key) && !args.get(key).isJsonNull();
     }
+
+    /**
+     * Reads a string-array argument, or null when it is absent — the distinction matters for filter
+     * arguments, where "not given" (match everything) and "given empty" (match nothing) differ.
+     */
+    public java.util.Set<String> strings(String key) {
+        if (!has(key)) return null;
+        if (!args.get(key).isJsonArray()) throw ApiException.badArgs("arg '" + key + "' must be a string array");
+        java.util.Set<String> out = new java.util.LinkedHashSet<>();
+        for (com.google.gson.JsonElement element : args.getAsJsonArray(key)) {
+            if (!element.isJsonPrimitive() || !element.getAsJsonPrimitive().isString()) {
+                throw ApiException.badArgs("arg '" + key + "' must be a string array");
+            }
+            out.add(element.getAsString());
+        }
+        return out;
+    }
+
+    /** Required array argument. */
+    public com.google.gson.JsonArray array(String key) {
+        if (!has(key)) throw ApiException.badArgs("missing required arg: " + key);
+        if (!args.get(key).isJsonArray()) throw ApiException.badArgs("arg '" + key + "' must be an array");
+        return args.getAsJsonArray(key);
+    }
+
+    /** Ordered string-array argument, empty when absent. */
+    public java.util.List<String> stringList(String key) {
+        java.util.Set<String> set = strings(key);
+        return set == null ? java.util.List.of() : java.util.List.copyOf(set);
+    }
 }

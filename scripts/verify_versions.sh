@@ -20,8 +20,11 @@ BOT_PID=""
 cleanup() {
   echo "[versions] cleaning up..."
   [[ -n "$BOT_PID" ]] && kill "$BOT_PID" 2>/dev/null || true
-  # gradlew runClient forks the game JVM; make sure it goes too.
-  pkill -f "mezzoclef.headless=true" 2>/dev/null || true
+  # gradlew runClient forks the game JVM. Kill only the ones from THIS checkout — killing by
+  # bare process name would take out an unrelated Minecraft on the same machine.
+  pkill -f "mezzoclef.headless=true.*$ROOT" 2>/dev/null || true
+  pgrep -af "mezzoclef.headless=true" 2>/dev/null | grep "$ROOT" | awk '{print $1}' \
+    | xargs -r kill 2>/dev/null || true
   wait 2>/dev/null || true
 }
 trap cleanup EXIT

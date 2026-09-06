@@ -14,6 +14,11 @@ import java.util.concurrent.ForkJoinTask;
  * <p>This is the "GPU-free" screenshot backend. It won't reproduce vanilla textures/shaders, but
  * it renders the real world geometry <i>and entities/players</i> from any position/angle/res.
  *
+ * <p>Two projections, chosen by {@link RenderCamera#orthographic()}: the usual perspective camera,
+ * and an orthographic one where every ray shares a direction and the origin sweeps the viewport
+ * plane. The second is what makes a usable top-down map — under perspective, a camera pointed
+ * straight down renders the block beneath you huge and the blocks at the edges as slivers.
+ *
  * <h2>Performance</h2>
  * <ul>
  *   <li><b>Zero per-ray allocation.</b> The slab test ({@link #intersectBox}) is fully scalar —
@@ -84,9 +89,13 @@ public final class SoftwareRaycaster {
         double aspect = (double) w / (double) h;
         EntityBox[] ents = entities.toArray(new EntityBox[0]);
 
+        // Orthographic: rays are parallel and the *origin* sweeps the viewport plane instead.
+        double orthoHalfH = cam.orthoHeight() / 2.0;
+        double orthoHalfW = orthoHalfH * aspect;
         Scene scene = new Scene(view, ents, cam.x(), cam.y(), cam.z(), cam.maxDistance(), w, h,
                 f[0], f[1], f[2], right[0], right[1], right[2], up[0], up[1], up[2],
-                tanHalf, aspect, skyTopArgb, skyBottomArgb);
+                tanHalf, aspect, skyTopArgb, skyBottomArgb,
+                cam.orthographic(), orthoHalfW, orthoHalfH);
 
         int bands = bandCount(w, h);
         if (bands <= 1) {
@@ -123,6 +132,18 @@ public final class SoftwareRaycaster {
             double ndcY = 1.0 - 2.0 * ((py + 0.5) / h);
             double nyt = ndcY * tanHalf;            // identical sub-expression, computed once per row
             int rowBase = py * w;
+            if (s.ortho) {
+                // Parallel projection: one shared direction, per-pixel origin on the viewport plane.
+                double vy = ndcY * s.orthoHalfH;
+                for (int px = 0; px < w; px++) {
+                    double vx = (2.0 * ((px + 0.5) / w) - 1.0) * s.orthoHalfW;
+                    double ox = s.ox + r0 * vx + u0 * vy;
+                    double oy = s.oy + r1 * vx + u1 * vy;
+                    double oz = s.oz + r2 * vx + u2 * vy;
+                    out[rowBase + px] = trace(s, ox, oy, oz, f0, f1, f2);
+                }
+                continue;
+            }
             for (int px = 0; px < w; px++) {
                 double ndcX = 2.0 * ((px + 0.5) / w) - 1.0;
                 double xta = ndcX * tanHalf * aspect; // identical sub-expression, computed once per pixel
@@ -130,14 +151,13 @@ public final class SoftwareRaycaster {
                 double dy = f1 + r1 * xta + u1 * nyt;
                 double dz = f2 + r2 * xta + u2 * nyt;
                 double inv = 1.0 / Math.sqrt(dx * dx + dy * dy + dz * dz);
-                out[rowBase + px] = trace(s, dx * inv, dy * inv, dz * inv);
+                out[rowBase + px] = trace(s, s.ox, s.oy, s.oz, dx * inv, dy * inv, dz * inv);
             }
         }
     }
 
-    private static int trace(Scene s, double dx, double dy, double dz) {
+    private static int trace(Scene s, double ox, double oy, double oz, double dx, double dy, double dz) {
         final VoxelView view = s.view;
-        final double ox = s.ox, oy = s.oy, oz = s.oz;
         final double maxDistance = s.maxDistance;
 
         // --- terrain via DDA ---
@@ -299,10 +319,13 @@ public final class SoftwareRaycaster {
         final double f0, f1, f2, r0, r1, r2, u0, u1, u2;
         final double tanHalf, aspect;
         final int skyTop, skyBottom;
+        final boolean ortho;
+        final double orthoHalfW, orthoHalfH;
 
         Scene(VoxelView view, EntityBox[] ents, double ox, double oy, double oz, double maxDistance,
               int w, int h, double f0, double f1, double f2, double r0, double r1, double r2,
-              double u0, double u1, double u2, double tanHalf, double aspect, int skyTop, int skyBottom) {
+              double u0, double u1, double u2, double tanHalf, double aspect, int skyTop, int skyBottom,
+              boolean ortho, double orthoHalfW, double orthoHalfH) {
             this.view = view; this.ents = ents;
             this.ox = ox; this.oy = oy; this.oz = oz; this.maxDistance = maxDistance;
             this.w = w; this.h = h;
@@ -311,6 +334,7 @@ public final class SoftwareRaycaster {
             this.u0 = u0; this.u1 = u1; this.u2 = u2;
             this.tanHalf = tanHalf; this.aspect = aspect;
             this.skyTop = skyTop; this.skyBottom = skyBottom;
+            this.ortho = ortho; this.orthoHalfW = orthoHalfW; this.orthoHalfH = orthoHalfH;
         }
     }
 

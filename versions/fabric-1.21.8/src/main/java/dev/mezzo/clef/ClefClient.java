@@ -1,5 +1,6 @@
 package dev.mezzo.clef;
 
+import dev.mezzo.clef.bot.EventEmitter;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
@@ -24,11 +25,12 @@ public final class ClefClient implements ClientModInitializer {
         ClientTickEvents.END_CLIENT_TICK.register(core::onClientTick);
 
         // System/game messages (server broadcasts, /say, join messages, ...).
-        ClientReceiveMessageEvents.GAME.register(
-                (message, overlay) -> core.onChatReceived(message.getString(), null, "game", overlay));
-        // Player chat (this is how other players' — and our own echoed — messages arrive).
+        ClientReceiveMessageEvents.GAME.register((message, overlay) -> core.onSystemMessage(message, overlay));
+        // Player chat (this is how other players' — and our own echoed — messages arrive). Fabric
+        // hands us the bound chat type, which is what classifies the message.
         ClientReceiveMessageEvents.CHAT.register((message, signedMessage, sender, params, timestamp) ->
-                core.onChatReceived(message.getString(), sender != null ? sender.getName() : null, "chat", false));
+                core.onChatMessage(EventEmitter.kindOf(params),
+                        sender != null ? sender.getName() : null, message));
 
         ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> core.onConnected());
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> core.onDisconnected());
