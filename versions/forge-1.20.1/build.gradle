@@ -36,6 +36,11 @@ legacyForge {
             if (System.getProperty('mezzoclef.headless') == null) {
                 systemProperty 'mezzoclef.headless', 'true'
             }
+            // NeoForge/Forge open an early "progress window" before the game starts, which needs
+            // GLFW to enumerate a monitor. A headless bot has no use for it, and on a machine with
+            // no active display it fails outright ("Failed to find a primary monitor"), taking the
+            // whole launch down with it. It is controlled by config/fml.toml rather than a system
+            // property, and FML writes that file itself on first run, so seed it before launching.
             jvmArguments.addAll("-Xmx${project.findProperty('maxHeap') ?: '768m'}".toString(),
                     '-XX:+UseG1GC', '-XX:MaxGCPauseMillis=50', '-XX:+UseStringDeduplication',
                     '-XX:G1PeriodicGCInterval=15000', '-XX:MaxMetaspaceSize=256m')
@@ -92,5 +97,22 @@ processResources {
     inputs.property 'minecraft_version', mcVersion
     filesMatching('META-INF/mods.toml') {
         expand version: project.version, minecraft_version: mcVersion
+    }
+}
+
+// FML reads earlyWindowControl from config/fml.toml, which it generates on first run. Seed the
+// file (or flip the flag if it already exists) before the client starts, so the early window is
+// never attempted on a headless host.
+tasks.named('runClient') {
+    doFirst {
+        def cfg = file("${projectDir}/run/config/fml.toml")
+        cfg.parentFile.mkdirs()
+        def text = cfg.exists() ? cfg.text : ""
+        if (text =~ /(?m)^earlyWindowControl\s*=/) {
+            text = text.replaceAll(/(?m)^earlyWindowControl\s*=.*$/, 'earlyWindowControl = false')
+        } else {
+            text += (text.endsWith("\n") || text.isEmpty() ? "" : "\n") + "earlyWindowControl = false\n"
+        }
+        cfg.text = text
     }
 }
