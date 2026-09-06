@@ -156,17 +156,24 @@ def wait_for_event(s, name, predicate, timeout=30):
         if msg.get("event") == name and predicate(msg.get("data") or {}):
             return msg["data"]
     deadline = time.time() + timeout
-    while time.time() < deadline:
-        s.settimeout(max(1, deadline - time.time()))
-        try:
-            msg = json.loads(recv_text(s))
-        except (socket.timeout, OSError):
-            break
-        if msg.get("event"):
-            print(f"[probe] event: {msg['event']} {msg.get('data')}")
-            EVENTS_SEEN.append(msg)
-            if msg["event"] == name and predicate(msg.get("data") or {}):
-                return msg["data"]
+    previous = s.gettimeout()
+    try:
+        while time.time() < deadline:
+            s.settimeout(max(1, deadline - time.time()))
+            try:
+                msg = json.loads(recv_text(s))
+            except (socket.timeout, OSError):
+                break
+            if msg.get("event"):
+                print(f"[probe] event: {msg['event']} {msg.get('data')}")
+                EVENTS_SEEN.append(msg)
+                if msg["event"] == name and predicate(msg.get("data") or {}):
+                    return msg["data"]
+    finally:
+        # Restore the socket's original timeout. Leaving the short per-wait deadline in place made
+        # the NEXT request fail with a bare "timed out" the moment a command took longer than the
+        # leftover slice — which is what broke 26.2.
+        s.settimeout(previous)
     raise RuntimeError(f"no '{name}' event matching predicate within {timeout}s")
 
 
