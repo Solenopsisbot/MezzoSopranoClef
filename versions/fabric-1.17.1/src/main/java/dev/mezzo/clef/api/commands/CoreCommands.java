@@ -147,7 +147,11 @@ public final class CoreCommands {
             // User exposes the id as a String here; getProfileId()/UUID arrives in 1.19.3. The
             // account type is carried explicitly on this release, so report it directly.
             o.addProperty("uuid", s.getUuid());
-            o.addProperty("type", s.getType().name());
+            // Report the type of the session we actually injected. There is nothing on User to
+            // infer it from: 26.x dropped User.Type, and getProfileId() is non-null for offline
+            // sessions too (OfflineAuth derives a stable UUID), so a null check there calls every
+            // offline bot "MSA" — the default mode for the e2e scripts and the Docker image.
+            o.addProperty("type", dev.mezzo.clef.auth.AuthManager.activeAccountType());
             return o;
         }));
 

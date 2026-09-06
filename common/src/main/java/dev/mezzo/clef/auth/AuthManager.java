@@ -36,8 +36,26 @@ public final class AuthManager {
      *                 the operator must visit. Surface it via logs/control plane.
      */
     public MinecraftSession authenticate(Consumer<MicrosoftAuth.DevicePrompt> onPrompt) {
-        return isMicrosoftMode() ? microsoft(onPrompt) : offline();
+        MinecraftSession session = isMicrosoftMode() ? microsoft(onPrompt) : offline();
+        activeType = session.type().name();
+        return session;
     }
+
+    /**
+     * The account type of the session we most recently produced ("LEGACY" or "MSA"), or null before
+     * the first authentication.
+     *
+     * <p>{@code auth.status} reports this rather than inferring from the live {@code User}. There is
+     * nothing on {@code User} to infer it from: 26.x dropped {@code User.Type} entirely, and
+     * {@code getProfileId()} is non-null for offline sessions too — {@code OfflineAuth} derives a
+     * stable UUID — so a null check there reports every offline bot as MSA, which is the default
+     * mode for the e2e scripts and the Docker image.
+     */
+    public static String activeAccountType() {
+        return activeType;
+    }
+
+    private static volatile String activeType;
 
     private MinecraftSession offline() {
         MinecraftSession s = OfflineAuth.create(config.auth.offlineUsername);

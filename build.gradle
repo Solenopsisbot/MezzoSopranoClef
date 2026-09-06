@@ -479,10 +479,29 @@ tasks.register('verifyVersionMatrix') {
                     throw new GradleException("Native target ${mcv} should be the root project, got ${entry.module}")
                 }
             } else {
-                def dir = file("versions/fabric-${mcv}")
-                if (!dir.isDirectory()) throw new GradleException("Native target ${mcv} claims a module that does not exist: ${dir}")
-                if (!new File(dir, 'build.gradle').isFile()) throw new GradleException("Native target ${mcv} has no build.gradle")
-                if (!settingsFileIncludes(mcv)) throw new GradleException("Native target ${mcv} is not included in settings.gradle")
+                // Check the module the entry actually declares. Assuming versions/fabric-<mc> made
+                // every NeoForge and Forge entry pass on its Fabric twin's directory — deleting
+                // versions/neoforge-1.21.8 would not have failed this check.
+                def loader = (entry.loader ?: 'fabric').toString()
+                def moduleName = "${loader}-${mcv}"
+                def dir = file("versions/${moduleName}")
+                if (entry.module && entry.module.toString() != "versions/${moduleName}") {
+                    throw new GradleException("Native target ${loader} ${mcv} declares module ${entry.module}, expected versions/${moduleName}")
+                }
+                if (!dir.isDirectory()) throw new GradleException("Native target ${loader} ${mcv} claims a module that does not exist: ${dir}")
+                if (!new File(dir, 'build.gradle').isFile()) throw new GradleException("Native target ${loader} ${mcv} has no build.gradle")
+                if (!settingsFileIncludes(moduleName)) throw new GradleException("Native target ${loader} ${mcv} is not included in settings.gradle")
+
+                // The module must also agree with itself about which release it is. This was wrong
+                // in 13 modules because the scaffolder copied the donor's constant verbatim, and on
+                // Forge it fed ModPlatform.minecraftVersion().
+                def caps = new File(dir, "src/main/java/dev/mezzo/clef/version/VersionCapabilities.java")
+                if (caps.isFile()) {
+                    def declared = (caps.text =~ /MINECRAFT = "([^"]*)"/)
+                    if (declared && declared[0][1] != mcv) {
+                        throw new GradleException("Native target ${loader} ${mcv} declares MINECRAFT = \"${declared[0][1]}\" in VersionCapabilities")
+                    }
+                }
             }
         }
         def nativeStatuses = natives.countBy { it.status }
@@ -518,8 +537,8 @@ tasks.register('verifyVersionMatrix') {
 
 
 /** True when settings.gradle actually wires this native target into the build. */
-def settingsFileIncludes(String mcVersion) {
-    file('settings.gradle').text.contains("include 'versions:fabric-${mcVersion}'")
+def settingsFileIncludes(String moduleName) {
+    file('settings.gradle').text.contains("include 'versions:${moduleName}'")
 }
 
 // Build every native per-version client jar in one go (the root project is the newest release).

@@ -715,7 +715,7 @@
     }
   ],
   "nativeClientsNotStarted": {
-    "forge": "No Forge target exists. Forge is a different loader again (its own entrypoints, event bus and build plugin). The loader seam that NeoForge proved out \u2014 ModPlatform plus a thin client wiring class over the shared ClefBotCore \u2014 is what a Forge port would reuse.",
+    "forge": "A Forge 1.20.1 target exists and builds, but it is NOT working: its mixins never apply, so the bot cannot function. It is recorded in nativeClients with status jar-built and the full reason. No other Forge release is attempted.",
     "1.12.2": "Forge-only, Java 8, and predates Mojang's published mappings (needs MCP/Parchment). The single largest port in the matrix; not attempted.",
     "fabric<=1.13.2": "1.14.4 is the floor: Mojang first published official mappings for it, and the whole matrix is built against Mojang mappings so common/ can be shared verbatim. Older releases would need a different mapping set (MCP/Parchment) and a separate toolchain.",
     "neoforge<=1.20.2": "NeoForge itself only starts at 1.20.2, so 1.20.4 is the oldest target here. 1.20.2 and 1.20.3 are not built simply because nothing needed them; scripts/new_neoforge_version.py would scaffold either.",
