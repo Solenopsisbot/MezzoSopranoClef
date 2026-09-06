@@ -131,6 +131,10 @@ def call(s, cmd, timeout=30, **args):
     mid = str(_id)
     send_text(s, json.dumps({"id": mid, "cmd": cmd, "args": args}))
     deadline = time.time() + timeout
+    # The socket still carries the handshake's short timeout, so without this a command that takes
+    # longer than that fails with a bare "timed out" no matter what its own timeout says — which is
+    # exactly what a loaded machine or a slow first screenshot hits.
+    s.settimeout(timeout)
     while time.time() < deadline:
         msg = json.loads(recv_text(s))
         if msg.get("event"):
