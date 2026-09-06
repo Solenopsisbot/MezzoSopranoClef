@@ -657,6 +657,30 @@
       "module": "versions/neoforge-1.21.1",
       "noGl": false,
       "status": "jar-built"
+    },
+    {
+      "minecraft": "1.21.11",
+      "loader": "neoforge",
+      "java": 21,
+      "module": "versions/neoforge-1.21.11",
+      "noGl": false,
+      "status": "jar-built"
+    },
+    {
+      "minecraft": "1.21.5",
+      "loader": "neoforge",
+      "java": 21,
+      "module": "versions/neoforge-1.21.5",
+      "noGl": false,
+      "status": "jar-built"
+    },
+    {
+      "minecraft": "1.21.4",
+      "loader": "neoforge",
+      "java": 21,
+      "module": "versions/neoforge-1.21.4",
+      "noGl": false,
+      "status": "jar-built"
     }
   ],
   "nativeClientsNotStarted": {

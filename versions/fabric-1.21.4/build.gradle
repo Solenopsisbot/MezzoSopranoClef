@@ -33,7 +33,8 @@ dependencies {
 
 sourceSets {
     main {
-        java.srcDirs = ['../../common/src/main/java', '../../fabric-common/src/main/java', 'src/main/java']
+        java.srcDirs = ['../../common/src/main/java', '../../fabric-common/src/main/java',
+                        '../mc-1.21.4/src/main/java', 'src/main/java']
         resources.srcDirs = ['../../common/src/main/resources', 'src/main/resources']
     }
 }

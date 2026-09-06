@@ -54,3 +54,6 @@ include 'versions:fabric-1.14.4'
 // ---------------------------------------------------------------------------
 include 'versions:neoforge-1.21.8'
 include 'versions:neoforge-1.21.1'
+include 'versions:neoforge-1.21.11'
+include 'versions:neoforge-1.21.5'
+include 'versions:neoforge-1.21.4'
