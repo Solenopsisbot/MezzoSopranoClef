@@ -70,6 +70,24 @@ python3 scripts/check_accessors.py 1.16.5                    # @Accessor types v
 Look the signature up rather than recalling it — the same method changes shape several times across
 the matrix, and a wrong guess costs a boot to discover.
 
+### Layering
+
+Four layers, sharing as much as honestly possible:
+
+| Where | What | Compiled into |
+|---|---|---|
+| `common/` | loader- and version-neutral; reaches the loader only via `ModPlatform` | every target |
+| `fabric-common/` | Fabric entrypoints + `FabricPlatform` | every Fabric target |
+| `versions/mc-<mc>/` | one release's Minecraft glue, where two loaders share a release | that release's targets |
+| `versions/<loader>-<mc>/` | that loader's platform, entrypoint and event wiring | itself |
+
+Adding a **loader** (Forge, say) means implementing `ModPlatform` and writing a small class that
+adapts that loader's events onto `ClefBotCore` — the Fabric one is 36 lines, the NeoForge one 48.
+Adding a **version** means porting only the Minecraft glue. Two things learned porting NeoForge,
+both invisible to the compiler: NeoForge constructs mods while `Minecraft.getInstance()` is still
+null (Fabric's client entrypoint runs after it exists), and NeoForge patches Blaze3D with its own
+extension interfaces, which is why the GPU-free stub device is per-loader rather than per-release.
+
 Keep version-agnostic code in `common/` — it is compiled into every target, so anything added
 there must build against all of them, back to 1.14.4. Two traps live there: Minecraft only puts
 **SLF4J** on the classpath from 1.17 (so `common/` logs through the Log4j2 API, which every release
