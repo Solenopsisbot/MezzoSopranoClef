@@ -36,6 +36,9 @@ e2e/*.log
 e2e/*.png
 e2e/*.out
 e2e/*.pid
+# Extra isolated harnesses: e2e.sh takes SERVER_DIR/MC_PORT/WS_PORT so a second run (or
+# verify_agent_api.py) can live beside the default one without fighting over ports or a world.
+e2e-*/
 
 # Run logs + Python probe/benchmark bytecode caches
 logs/

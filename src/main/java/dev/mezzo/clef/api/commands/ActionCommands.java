@@ -4,9 +4,18 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import dev.mezzo.clef.api.ApiException;
 import dev.mezzo.clef.api.CommandDispatcher;
+import dev.mezzo.clef.bot.ActionManager;
+import dev.mezzo.clef.bot.Hotbar;
+import dev.mezzo.clef.bot.RecipeIndex;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityType;
+import net.minecraft.entity.ItemEntity;
+import net.minecraft.entity.LivingEntity;
+import net.minecraft.entity.SpawnGroup;
+import net.minecraft.entity.mob.MobEntity;
+import net.minecraft.entity.passive.TameableEntity;
+import net.minecraft.entity.passive.VillagerEntity;
 import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.item.ItemStack;
 import net.minecraft.network.packet.c2s.play.PlayerActionC2SPacket;
@@ -15,9 +24,17 @@ import net.minecraft.util.ActionResult;
 import net.minecraft.util.Hand;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
+import net.minecraft.util.math.Vec3d;
+
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 /** Bot actuation + world-query commands (movement, mining, placing, combat, inventory, queries). */
 public final class ActionCommands {
+
+    /** How long {@code place} waits for the server to confirm the world actually changed. */
+    private static final int PLACE_CONFIRM_TICKS = 10;
 
     public static void registerAll(CommandDispatcher d) {
 
@@ -39,18 +56,28 @@ public final class ActionCommands {
             return o;
         });
 
-        d.register("mine", "start breaking a block over time {x,y,z,face?}", ctx -> {
-            BlockPos pos = new BlockPos(ctx.requireInt("x"), ctx.requireInt("y"), ctx.requireInt("z"));
-            Direction face = parseFace(ctx.str("face", "up"));
-            return ctx.onMain(() -> {
-                MinecraftClient mc = MinecraftClient.getInstance();
-                if (mc.player == null) throw ApiException.notInWorld();
-                ctx.server.services.actions.startMining(pos, face);
-                JsonObject o = new JsonObject();
-                o.addProperty("mining", true);
-                return o;
-            });
-        });
+        d.register("mine", "break a block over time {x,y,z,face?,wait?} — emits mineDone; wait blocks for it",
+                ctx -> {
+                    BlockPos pos = new BlockPos(ctx.requireInt("x"), ctx.requireInt("y"), ctx.requireInt("z"));
+                    Direction face = parseFace(ctx.str("face", "up"));
+                    boolean wait = ctx.bool("wait", false);
+                    CompletableFuture<ActionManager.MineResult> done = ctx.onMain(() -> {
+                        MinecraftClient mc = MinecraftClient.getInstance();
+                        if (mc.player == null) throw ApiException.notInWorld();
+                        return ctx.server.services.actions.startMining(mc, pos, face);
+                    });
+                    if (!wait) {
+                        JsonObject o = new JsonObject();
+                        // Requests answerable without the server (already air, bedrock) resolve on the
+                        // spot, so report the real outcome instead of an optimistic "mining: true".
+                        if (done.isDone()) return mineJson(done.get());
+                        o.addProperty("mining", true);
+                        return o;
+                    }
+                    // MAX_MINING_TICKS is ~10s; the extra headroom is for a laggy server, not for
+                    // the mine itself, which always ends in a completion.
+                    return mineJson(done.get(30, TimeUnit.SECONDS));
+                });
 
         d.register("stopMine", "stop breaking", ctx -> ctx.onMain(() -> {
             ctx.server.services.actions.stopMining(MinecraftClient.getInstance());
@@ -69,18 +96,51 @@ public final class ActionCommands {
             });
         });
 
-        d.register("place", "right-click/place against a block face {x,y,z,face?}", ctx -> {
-            BlockPos pos = new BlockPos(ctx.requireInt("x"), ctx.requireInt("y"), ctx.requireInt("z"));
-            Direction face = parseFace(ctx.str("face", "up"));
-            return ctx.onMain(() -> {
-                MinecraftClient mc = MinecraftClient.getInstance();
-                if (mc.player == null) throw ApiException.notInWorld();
-                ctx.server.services.actions.interactBlock(mc, pos, face);
-                JsonObject o = new JsonObject();
-                o.addProperty("placed", true);
-                return o;
-            });
-        });
+        d.register("place",
+                "right-click/place against a block face {x,y,z,face?,item?,confirm?} — 'placed' is verified, not assumed",
+                ctx -> {
+                    BlockPos pos = new BlockPos(ctx.requireInt("x"), ctx.requireInt("y"), ctx.requireInt("z"));
+                    Direction face = parseFace(ctx.str("face", "up"));
+                    String item = ctx.has("item") ? ctx.requireStr("item") : null;
+                    boolean confirm = ctx.bool("confirm", true);
+
+                    record Started(ActionResult result, Hotbar.Selection selection,
+                                   CompletableFuture<ActionManager.PlaceOutcome> outcome) {}
+
+                    Started started = ctx.onMain(() -> {
+                        MinecraftClient mc = MinecraftClient.getInstance();
+                        if (mc.player == null || mc.interactionManager == null) throw ApiException.notInWorld();
+                        Hotbar.Selection selection = item == null ? null
+                                : Hotbar.select(mc, RecipeIndex.resolveItem(item), null);
+                        // Start watching *before* the click: the server can answer within a tick.
+                        CompletableFuture<ActionManager.PlaceOutcome> outcome = confirm
+                                ? ctx.server.services.actions.confirmPlace(mc, pos, face, PLACE_CONFIRM_TICKS)
+                                : null;
+                        ActionResult result = ctx.server.services.actions.interactBlock(mc, pos, face);
+                        return new Started(result, selection, outcome);
+                    });
+
+                    JsonObject o = new JsonObject();
+                    o.addProperty("result", String.valueOf(started.result()));
+                    if (started.selection() != null) o.addProperty("slot", started.selection().slot());
+                    if (started.outcome() == null) {
+                        // confirm:false — we only know the click was accepted locally.
+                        o.addProperty("placed", started.result().isAccepted());
+                        o.addProperty("confirmed", false);
+                        return o;
+                    }
+                    ActionManager.PlaceOutcome outcome = started.outcome().get(5, TimeUnit.SECONDS);
+                    o.addProperty("placed", outcome.placed());
+                    o.addProperty("confirmed", true);
+                    o.addProperty("ticks", outcome.ticks());
+                    if (outcome.at() != null) {
+                        o.addProperty("x", outcome.at().getX());
+                        o.addProperty("y", outcome.at().getY());
+                        o.addProperty("z", outcome.at().getZ());
+                        o.addProperty("block", outcome.block());
+                    }
+                    return o;
+                });
 
         d.register("use", "use held item / right-click air {hand?}", ctx -> {
             Hand hand = parseHand(ctx.str("hand", "main"));
@@ -155,30 +215,27 @@ public final class ActionCommands {
             return o;
         }));
 
-        d.register("entities", "list nearby entities {radius?=16}", ctx -> {
-            double radius = ctx.d("radius", 16);
-            return ctx.onMain(() -> {
-                MinecraftClient mc = MinecraftClient.getInstance();
-                if (mc.player == null || mc.world == null) throw ApiException.notInWorld();
-                double r2 = radius * radius;
-                JsonArray arr = new JsonArray();
-                for (Entity e : mc.world.getEntities()) {
-                    if (e == mc.player || !e.isAlive()) continue;
-                    double d2 = e.squaredDistanceTo(mc.player);
-                    if (d2 > r2) continue;
-                    JsonObject je = new JsonObject();
-                    je.addProperty("id", e.getId());
-                    je.addProperty("type", EntityType.getId(e.getType()).toString());
-                    je.addProperty("name", e.getName().getString());
-                    je.addProperty("x", e.getX());
-                    je.addProperty("y", e.getY());
-                    je.addProperty("z", e.getZ());
-                    je.addProperty("distance", Math.sqrt(d2));
-                    arr.add(je);
-                }
-                return arr;
-            });
-        });
+        d.register("entities",
+                "list nearby entities with combat/trade detail {radius?=16, kinds?:[type ids]}",
+                ctx -> {
+                    double radius = ctx.d("radius", 16);
+                    Set<String> kinds = ctx.strings("kinds");
+                    return ctx.onMain(() -> {
+                        MinecraftClient mc = MinecraftClient.getInstance();
+                        if (mc.player == null || mc.world == null) throw ApiException.notInWorld();
+                        double r2 = radius * radius;
+                        JsonArray arr = new JsonArray();
+                        for (Entity e : mc.world.getEntities()) {
+                            if (e == mc.player || !e.isAlive()) continue;
+                            double d2 = e.squaredDistanceTo(mc.player);
+                            if (d2 > r2) continue;
+                            String type = EntityType.getId(e.getType()).toString();
+                            if (kinds != null && !matchesKind(kinds, type)) continue;
+                            arr.add(describeEntity(mc, e, type, Math.sqrt(d2)));
+                        }
+                        return arr;
+                    });
+                });
 
         d.register("blockAt", "block id at {x,y,z}", ctx -> {
             BlockPos pos = new BlockPos(ctx.requireInt("x"), ctx.requireInt("y"), ctx.requireInt("z"));
@@ -263,6 +320,106 @@ public final class ActionCommands {
             o.addProperty("respawned", true);
             return o;
         }));
+    }
+
+    /** Shared shape between {@code mine wait:true} and the {@code mineDone} event. */
+    private static JsonObject mineJson(ActionManager.MineResult result) {
+        JsonObject o = new JsonObject();
+        o.addProperty("x", result.pos().getX());
+        o.addProperty("y", result.pos().getY());
+        o.addProperty("z", result.pos().getZ());
+        o.addProperty("mining", false);
+        o.addProperty("broken", result.broken());
+        if (result.reason() != null) o.addProperty("reason", result.reason());
+        if (result.detail() != null) o.addProperty("detail", result.detail());
+        o.addProperty("ticks", result.ticks());
+        return o;
+    }
+
+    // ---- entity description ----------------------------------------------------------
+
+    /**
+     * Everything about a nearby entity that a survival bot has to decide on: is it dangerous, is it
+     * hurt, what is it holding, is it mine, and is it looking at me. Fields that don't apply to a
+     * given entity are simply absent rather than null-filled.
+     */
+    static JsonObject describeEntity(MinecraftClient mc, Entity e, String type, double distance) {
+        JsonObject je = new JsonObject();
+        je.addProperty("id", e.getId());
+        je.addProperty("type", type);
+        je.addProperty("name", e.getName().getString());
+        je.addProperty("x", e.getX());
+        je.addProperty("y", e.getY());
+        je.addProperty("z", e.getZ());
+        je.addProperty("distance", distance);
+        je.addProperty("onFire", e.isOnFire());
+
+        Vec3d velocity = e.getVelocity();
+        JsonArray vel = new JsonArray();
+        vel.add(velocity.x);
+        vel.add(velocity.y);
+        vel.add(velocity.z);
+        je.add("velocity", vel);
+
+        if (e instanceof LivingEntity living) {
+            je.addProperty("health", living.getHealth());
+            je.addProperty("maxHealth", living.getMaxHealth());
+            je.addProperty("armor", living.getArmor());
+            je.addProperty("baby", living.isBaby());
+            ItemStack held = living.getMainHandStack();
+            if (!held.isEmpty()) je.addProperty("held", Registries.ITEM.getId(held.getItem()).toString());
+            je.addProperty("lookingAtMe", lookingAt(living, mc.player));
+        }
+
+        // "Hostile" is two different questions: is this the kind of thing that attacks players, and
+        // is this particular one attacking *me* right now. A tamed wolf is not a monster but can be
+        // actively hunting you; a distant zombie is a monster that hasn't noticed you.
+        boolean monster = e.getType().getSpawnGroup() == SpawnGroup.MONSTER;
+        boolean targetingUs = e instanceof MobEntity mob && mob.getTarget() == mc.player;
+        je.addProperty("hostile", monster || targetingUs);
+        je.addProperty("targetingMe", targetingUs);
+
+        if (e instanceof ItemEntity item) {
+            JsonObject stack = new JsonObject();
+            stack.addProperty("id", Registries.ITEM.getId(item.getStack().getItem()).toString());
+            stack.addProperty("count", item.getStack().getCount());
+            je.add("item", stack);
+        }
+        if (e instanceof VillagerEntity villager) {
+            JsonObject data = new JsonObject();
+            villager.getVillagerData().profession().getKey()
+                    .ifPresent(key -> data.addProperty("profession", key.getValue().toString()));
+            data.addProperty("level", villager.getVillagerData().level());
+            je.add("villager", data);
+        }
+        if (e instanceof TameableEntity tameable && tameable.isTamed()) {
+            var owner = tameable.getOwnerReference();
+            if (owner != null) {
+                je.addProperty("owner", owner.getUuid().toString());
+                je.addProperty("ownedByMe", mc.player != null && owner.getUuid().equals(mc.player.getUuid()));
+            }
+        }
+        return je;
+    }
+
+    /**
+     * How squarely {@code source} is facing {@code target}: the dot product of its look vector with
+     * the direction to the target's eyes. 1 is dead-on, 0 is side-on, negative is facing away.
+     */
+    private static double lookingAt(LivingEntity source, Entity target) {
+        if (target == null) return 0;
+        Vec3d look = source.getRotationVec(1.0f).normalize();
+        Vec3d toTarget = target.getEyePos().subtract(source.getEyePos());
+        double length = toTarget.length();
+        if (length < 1e-6) return 1;
+        return look.dotProduct(toTarget.multiply(1.0 / length));
+    }
+
+    /** Accepts both {@code minecraft:zombie} and a bare {@code zombie} in the {@code kinds} filter. */
+    private static boolean matchesKind(Set<String> kinds, String type) {
+        if (kinds.contains(type)) return true;
+        int colon = type.indexOf(':');
+        return colon >= 0 && kinds.contains(type.substring(colon + 1));
     }
 
     private static Direction parseFace(String s) {

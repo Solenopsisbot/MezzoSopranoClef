@@ -42,7 +42,7 @@ class ControlServerIntegrationTest {
         cfg.control.authToken = "";
 
         ControlServer server = new ControlServer(cfg,
-                new ClefServices(new ScreenshotService(cfg), new BaritoneNavigator(), new InputController(), new ActionManager(), new UseController()));
+                ClefServices.standard(cfg));
         server.start();
         try (Socket s = new Socket("127.0.0.1", port)) {
             s.setSoTimeout(5000);
@@ -85,7 +85,7 @@ class ControlServerIntegrationTest {
         cfg.control.port = port;
 
         ControlServer server = new ControlServer(cfg,
-                new ClefServices(new ScreenshotService(cfg), new BaritoneNavigator(), new InputController(), new ActionManager(), new UseController()));
+                ClefServices.standard(cfg));
         server.start();
         try (Socket s = new Socket("127.0.0.1", port)) {
             s.setSoTimeout(5000);
@@ -118,7 +118,7 @@ class ControlServerIntegrationTest {
         cfg.control.host = "127.0.0.1";
         cfg.control.port = port;
         ControlServer server = new ControlServer(cfg,
-                new ClefServices(new ScreenshotService(cfg), new BaritoneNavigator(), new InputController(), new ActionManager(), new UseController()));
+                ClefServices.standard(cfg));
         server.start();
 
         try (Socket a = connectWs(port); Socket b = connectWs(port)) {
@@ -157,7 +157,7 @@ class ControlServerIntegrationTest {
         cfg.control.host = "127.0.0.1";
         cfg.control.port = port;
         ControlServer server = new ControlServer(cfg,
-                new ClefServices(new ScreenshotService(cfg), new BaritoneNavigator(), new InputController(), new ActionManager(), new UseController()));
+                ClefServices.standard(cfg));
         server.start();
         try (Socket s = new Socket("127.0.0.1", port)) {
             s.setSoTimeout(5000);
@@ -191,7 +191,7 @@ class ControlServerIntegrationTest {
         cfg.control.dashboard = true;
         cfg.control.dashboardPort = dashboardPort;
         ControlServer server = new ControlServer(cfg,
-                new ClefServices(new ScreenshotService(cfg), new BaritoneNavigator(), new InputController(), new ActionManager(), new UseController()));
+                ClefServices.standard(cfg));
         server.start();
         try (Socket s = new Socket("127.0.0.1", port)) {
             s.setSoTimeout(5000);
@@ -220,7 +220,7 @@ class ControlServerIntegrationTest {
         cfg.control.port = port;
         cfg.control.authToken = "secret";
         ControlServer server = new ControlServer(cfg,
-                new ClefServices(new ScreenshotService(cfg), new BaritoneNavigator(), new InputController(), new ActionManager(), new UseController()));
+                ClefServices.standard(cfg));
         server.start();
 
         try (Socket s = connectWs(port)) {
@@ -256,7 +256,7 @@ class ControlServerIntegrationTest {
         cfg.control.authToken = "full";
         cfg.control.readOnlyAuthToken = "read";
         ControlServer server = new ControlServer(cfg,
-                new ClefServices(new ScreenshotService(cfg), new BaritoneNavigator(), new InputController(), new ActionManager(), new UseController()));
+                ClefServices.standard(cfg));
         server.start();
 
         try (Socket s = connectWs(port)) {
@@ -289,7 +289,7 @@ class ControlServerIntegrationTest {
         cfg.control.port = port;
         cfg.control.authToken = "";
         ControlServer server = new ControlServer(cfg,
-                new ClefServices(new ScreenshotService(cfg), new BaritoneNavigator(), new InputController(), new ActionManager(), new UseController()));
+                ClefServices.standard(cfg));
         server.start();
         try (Socket s = connectWs(port)) {
             s.setSoTimeout(5000);
@@ -314,7 +314,7 @@ class ControlServerIntegrationTest {
         cfg.control.rateLimitPerSecond = 0.01;
         cfg.control.rateLimitBurst = 1;
         ControlServer server = new ControlServer(cfg,
-                new ClefServices(new ScreenshotService(cfg), new BaritoneNavigator(), new InputController(), new ActionManager(), new UseController()));
+                ClefServices.standard(cfg));
         server.start();
         try (Socket s = connectWs(port)) {
             s.setSoTimeout(5000);

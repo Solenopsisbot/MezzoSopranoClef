@@ -29,15 +29,26 @@ public final class ApiSchema {
      * Version of the JSON control protocol (envelope shape, command/event/error semantics). Bump
      * this on any breaking wire change; it's surfaced in the {@code welcome} event and the
      * {@code schema} command so clients can negotiate or fail fast.
+     *
+     * <p><b>2</b> — the {@code chat} event's {@code kind} became a closed enum
+     * ({@code chat|system|whisper|team|actionbar}); it previously reported the literal
+     * {@code "game"} for everything unsigned. {@code status} kept every field it had and gained a
+     * sibling {@code world} object. Everything else in this version was additive.</p>
      */
-    public static final int PROTOCOL_VERSION = 1;
+    public static final int PROTOCOL_VERSION = 2;
 
     /** Argument / field value types, rendered to a stable lowercase wire string. */
     public enum Type {
-        INT, LONG, DOUBLE, FLOAT, BOOL, STRING, STRING_ARRAY;
+        INT, LONG, DOUBLE, FLOAT, BOOL, STRING, STRING_ARRAY, OBJECT_ARRAY, INT_ARRAY, DOUBLE_ARRAY;
 
         String wire() {
-            return this == STRING_ARRAY ? "string[]" : name().toLowerCase();
+            return switch (this) {
+                case STRING_ARRAY -> "string[]";
+                case OBJECT_ARRAY -> "object[]";
+                case INT_ARRAY -> "int[]";
+                case DOUBLE_ARRAY -> "double[]";
+                default -> name().toLowerCase();
+            };
         }
     }
 
@@ -86,26 +97,49 @@ public final class ApiSchema {
             c("subscribe").opt("events", Type.STRING_ARRAY).result("{subscribed:[...]}"),
             c("unsubscribe").result("{unsubscribed}"),
             c("events").result("{events:{<name>:<desc>},subscribeAll}"),
-            c("status").result("{headless,noGl,noWindow,inWorld,player?{...},server?,nav*,screenshotBackend,...}"),
+            c("status").result("{headless,noGl,noWindow,screen,screenClass,inWorld,"
+                    + "player?{...,armor,effects,gamemode,air,...},"
+                    + "world?{time,weather,biome,light},server?,nav*,screenshotBackend,...}"),
             c("auth.status").result("{username,uuid,type}"),
             c("control.rotateToken").result("{rotated,authToken}"),
             c("connect").req("host", Type.STRING).opt("port", Type.INT, "25565").result("{connecting,host,port}"),
             c("disconnect").result("{disconnected}"),
             c("chat").req("message", Type.STRING).result("{sent}"),
+            c("chatHistory").opt("limit", Type.INT, "50")
+                    .result("{lines:[{time,kind:chat|system|whisper|team|actionbar,sender?,text}],stored} "
+                            + "— an object, not a bare array; oldest line first"),
+            c("whisper").req("player", Type.STRING).req("text", Type.STRING).result("{sent,command,to}"),
+            c("batch").req("commands", Type.OBJECT_ARRAY).opt("continueOnError", Type.BOOL, "false")
+                    .result("{results:[{cmd,ok,result?|code,error}],ran,requested}"),
             c("look").opt("yaw", Type.FLOAT).opt("pitch", Type.FLOAT).result("{yaw,pitch}"),
+            c("lookAt").opt("x", Type.DOUBLE).opt("y", Type.DOUBLE).opt("z", Type.DOUBLE)
+                    .opt("entityId", Type.INT).result("{yaw,pitch,distance}"),
             c("players").result("[{name,id,ping}]"),
             c("headless").opt("enabled", Type.BOOL).result("{headless}"),
             c("screenshot")
                     .opt("x", Type.DOUBLE).opt("y", Type.DOUBLE).opt("z", Type.DOUBLE)
                     .opt("yaw", Type.FLOAT).opt("pitch", Type.FLOAT)
                     .opt("width", Type.INT).opt("height", Type.INT).opt("fov", Type.FLOAT)
-                    .result("{format,backend,bytes,durationMs,snapshotMs,renderMs,pngMs,base64}"),
+                    .opt("mode", Type.STRING, "normal")
+                    .opt("centerX", Type.DOUBLE).opt("centerZ", Type.DOUBLE).opt("radius", Type.INT, "32")
+                    .opt("annotate", Type.BOOL, "false")
+                    .result("{format,backend,mode,bytes,width,height,durationMs,snapshotMs,renderMs,pngMs,"
+                            + "camera?,entities?:[{id,type,visible,box,depth}],base64}"),
+            c("registry").opt("kinds", Type.STRING_ARRAY).opt("tags", Type.BOOL, "false")
+                    .result("{minecraftVersion,blocks?,items?,entities?,tags?}"),
 
             // --- navigation (Baritone) ---
-            c("goto").req("x", Type.INT).req("z", Type.INT).opt("y", Type.INT).result("{pathing,backend}"),
-            c("baritone").req("command", Type.STRING).result("{ran,backend}"),
+            c("goto").req("x", Type.INT).req("z", Type.INT).opt("y", Type.INT).opt("reach", Type.INT, "1")
+                    .result("{pathing,reach,backend}"),
+            c("nav.check").req("x", Type.INT).req("y", Type.INT).req("z", Type.INT)
+                    .opt("reach", Type.INT, "1").opt("maxNodes", Type.INT)
+                    .result("{verdict:reachable|unreachable|unknown,reachable,cost?,nodes,maxNodes,exhausted,model} "
+                            + "— an estimate; 'unknown' means the search ran out of budget, NOT that "
+                            + "there is no route"),
+            c("baritone").req("command", Type.STRING).opt("collectMs", Type.INT, "250")
+                    .result("{ran,backend,output:[lines Baritone printed]}"),
             c("nav.stop").result("{stopped}"),
-            c("nav.status").result("{available,backend,active}"),
+            c("nav.status").result("{available,backend,active,blockArguments?,goal?}"),
 
             // --- movement / actuation ---
             c("move")
@@ -115,18 +149,31 @@ public final class ApiSchema {
                     .opt("durationMs", Type.INT).result("{moving}"),
             c("stopMove").result("{stopped}"),
             c("mine").req("x", Type.INT).req("y", Type.INT).req("z", Type.INT)
-                    .opt("face", Type.STRING, "up").result("{mining}"),
+                    .opt("face", Type.STRING, "up").opt("wait", Type.BOOL, "false")
+                    .result("{mining} | {x,y,z,mining:false,broken,reason?,detail?,ticks}"),
             c("stopMine").result("{stopped}"),
             c("breakBlock").req("x", Type.INT).req("y", Type.INT).req("z", Type.INT).result("{broken}"),
             c("place").req("x", Type.INT).req("y", Type.INT).req("z", Type.INT)
-                    .opt("face", Type.STRING, "up").result("{placed}"),
+                    .opt("face", Type.STRING, "up").opt("item", Type.STRING).opt("confirm", Type.BOOL, "true")
+                    .result("{placed,confirmed,result,ticks?,slot?,x?,y?,z?,block?}"),
             c("use").opt("hand", Type.STRING, "main").result("{used}"),
             c("attack").opt("entityId", Type.INT).result("{attacked,type}"),
             c("setSlot").req("slot", Type.INT).result("{slot}"),
             c("dropItem").opt("all", Type.BOOL).result("{dropped}"),
             c("inventory").result("{selectedSlot,items:[{slot,item,name,count}]}"),
-            c("entities").opt("radius", Type.DOUBLE, "16").result("[{id,type,name,x,y,z,distance}]"),
+            c("entities").opt("radius", Type.DOUBLE, "16").opt("kinds", Type.STRING_ARRAY)
+                    .result("[{id,type,name,x,y,z,distance,velocity,onFire,health?,maxHealth?,armor?,baby?,"
+                            + "held?,lookingAtMe?,hostile,targetingMe,item?,villager?,owner?}]"),
             c("blockAt").req("x", Type.INT).req("y", Type.INT).req("z", Type.INT).result("{block,air}"),
+            c("findBlocks").req("ids", Type.STRING_ARRAY).opt("radius", Type.INT, "32")
+                    .opt("max", Type.INT, "32").opt("sort", Type.STRING, "nearest")
+                    .result("[{x,y,z,block,distance}]"),
+            c("blocksIn").req("minX", Type.INT).req("minY", Type.INT).req("minZ", Type.INT)
+                    .req("maxX", Type.INT).req("maxY", Type.INT).req("maxZ", Type.INT)
+                    .opt("palette", Type.BOOL, "true")
+                    .result("{size,origin,order,palette?,encoding?,data?,blocks?}"),
+            c("target").opt("maxDistance", Type.DOUBLE, "4.5").opt("fluids", Type.BOOL, "false")
+                    .result("{kind:block|entity|none,x?,y?,z?,block?,face?,entityId?,type?,distance?}"),
             c("interactEntity").req("entityId", Type.INT).opt("hand", Type.STRING, "main")
                     .result("{interacted,type,result}"),
             c("swapHands").result("{swapped}"),
@@ -137,18 +184,27 @@ public final class ApiSchema {
             c("eat").opt("ticks", Type.INT, "40").result("{eating}"),
             c("respawn").result("{respawned}"),
 
+            // --- crafting ---
+            c("craft").req("item", Type.STRING).opt("count", Type.INT, "1").opt("all", Type.BOOL, "false")
+                    .result("{crafted,item,reason?}"),
+            c("recipes").req("item", Type.STRING)
+                    .result("[{result,count,recipeId,kind,ingredients:[{item?,items,tag?,count}],needsTable,"
+                            + "width?,height?,station?}]"),
+            c("craftable").result("{grid,knownRecipes,items:[{item,count,fitsOpenGrid}]}"),
+
             // --- containers / screens / inventory transfer ---
-            c("container").result("{handler,syncId,screen,slots,cursor,trades?}"),
+            c("container").result("{handler,syncId,screen,screenClass,slots,cursor,trades?}"),
             c("clickSlot").req("slot", Type.INT).opt("button", Type.INT, "0")
                     .opt("mode", Type.STRING, "pickup").result("{clicked,mode,cursor}"),
             c("closeScreen").result("{closed}"),
             c("selectTrade").req("index", Type.INT).result("{selected}"),
-            c("screen").result("{screen,widgets:[{index,type,text,x,y,active,visible}]}"),
+            c("screen").result("{screen,screenClass,widgets:[{index,type,text,x,y,active,visible}]}"),
             c("clickButton").req("index", Type.INT).result("{clicked,text}"),
             c("setText").req("index", Type.INT).opt("text", Type.STRING, "").result("{set}"),
             c("serverui").result("{title,bossBars,scoreboards,sidebar}"),
             c("findItem").req("item", Type.STRING).result("{total,slots:[{slot,count}]}"),
             c("equip").req("item", Type.STRING).result("{equipped,fromSlot}"),
+            c("moveToHotbar").req("item", Type.STRING).opt("slot", Type.INT).result("{slot,moved,fromSlot}"),
             c("deposit").req("item", Type.STRING).result("{deposited}"),
             c("withdraw").req("item", Type.STRING).result("{withdrew}"),
             c("dropStack").req("item", Type.STRING).result("{dropped}")
@@ -157,8 +213,10 @@ public final class ApiSchema {
     private static final List<E> EVENTS = List.of(
             e("welcome", "sent once on connect, before auth")
                     .f("server", Type.STRING).f("protocol", Type.INT).f("requiresAuth", Type.BOOL),
-            e("chat", "a chat or system message was received")
-                    .f("text", Type.STRING).opt("sender", Type.STRING).f("kind", Type.STRING),
+            e("chat", "a chat, system, whisper, team or action-bar message arrived; "
+                    + "'raw' is the JSON component, 'kind' is chat|system|whisper|team|actionbar")
+                    .f("text", Type.STRING).opt("sender", Type.STRING).f("kind", Type.STRING)
+                    .opt("raw", Type.STRING),
             e("health", "health or hunger changed").f("health", Type.FLOAT).f("food", Type.INT),
             e("damage", "the bot took damage").f("amount", Type.FLOAT).f("health", Type.FLOAT),
             e("death", "the bot died"),
@@ -171,11 +229,57 @@ public final class ApiSchema {
                     .f("x", Type.DOUBLE).f("y", Type.DOUBLE).f("z", Type.DOUBLE)
                     .f("yaw", Type.FLOAT).f("pitch", Type.FLOAT)
                     .f("health", Type.FLOAT).f("food", Type.INT).f("dimension", Type.STRING),
-            e("screenOpen", "a container/screen opened").f("screen", Type.STRING),
-            e("screenClose", "the open screen closed").f("screen", Type.STRING),
+            e("screenOpen", "a container/screen opened. 'screen' is a stable readable name "
+                    + "(title|connect|disconnected|death|downloading|message|inventory|crafting|furnace|"
+                    + "anvil|enchanting|merchant|sign|book|container|other); 'screenClass' is the raw "
+                    + "class, which is obfuscated outside a dev run")
+                    .f("screen", Type.STRING).f("screenClass", Type.STRING),
+            e("screenClose", "the open screen closed")
+                    .f("screen", Type.STRING).f("screenClass", Type.STRING),
             e("entitySpawn", "an entity appeared nearby (within 24 blocks)")
                     .f("id", Type.INT).f("type", Type.STRING).f("x", Type.DOUBLE).f("y", Type.DOUBLE).f("z", Type.DOUBLE),
             e("entityRemove", "a nearby entity left").f("id", Type.INT),
+            e("entityHurt", "an entity within events.packetRadius took damage — including us; "
+                    + "'attacker' is the entity id that dealt it, which is what self-defence needs")
+                    .f("id", Type.INT).f("type", Type.STRING).f("self", Type.BOOL).f("health", Type.FLOAT)
+                    .opt("source", Type.STRING).opt("attacker", Type.INT).opt("attackerType", Type.STRING),
+            e("itemPickup", "the bot picked an item up").f("item", Type.STRING).f("count", Type.INT),
+            e("inventory", "inventory slots changed this tick; fetch values with the inventory command")
+                    .f("changed", Type.INT_ARRAY),
+            e("blockUpdate", "a block changed within events.blockUpdateRadius of the bot")
+                    .f("x", Type.INT).f("y", Type.INT).f("z", Type.INT)
+                    .f("from", Type.STRING).f("to", Type.STRING),
+            e("explosion", "an explosion went off within events.packetRadius. 1.21.8's packet carries "
+                    + "no blast power, so 'knockback' (the impulse applied to us) is the only magnitude")
+                    .f("x", Type.DOUBLE).f("y", Type.DOUBLE).f("z", Type.DOUBLE).f("distance", Type.DOUBLE)
+                    .opt("knockback", Type.DOUBLE_ARRAY),
+            e("weather", "weather changed: clear | rain | thunder").f("kind", Type.STRING),
+            e("time", "the day phase changed: dawn | day | dusk | night")
+                    .f("phase", Type.STRING).f("time", Type.LONG).f("day", Type.LONG),
+            e("sleep", "the bot fell asleep (ok:true) or a bed was refused (ok:false, reason from the "
+                    + "server's block.minecraft.bed.* message)")
+                    .f("ok", Type.BOOL).opt("reason", Type.STRING).opt("key", Type.STRING)
+                    .opt("x", Type.INT).opt("y", Type.INT).opt("z", Type.INT),
+            e("title", "the title, subtitle or action bar text changed")
+                    .f("title", Type.STRING).f("subtitle", Type.STRING).f("actionBar", Type.STRING),
+            e("mineDone", "a mine request finished; reason is cant_break | cancelled | replaced | not_in_world")
+                    .f("x", Type.INT).f("y", Type.INT).f("z", Type.INT).f("broken", Type.BOOL)
+                    .opt("reason", Type.STRING).opt("detail", Type.STRING).f("ticks", Type.INT),
+            e("nav.done", "the bot reached its goto goal")
+                    .f("x", Type.INT).opt("y", Type.INT).f("z", Type.INT).f("reach", Type.INT),
+            e("nav.failed", "the goal is over and was NOT reached. Always terminal — no nav.done can "
+                    + "follow for the same goal. reason is a terminal Baritone PathEvent (CALC_FAILED, "
+                    + "CANCELED) or CANCELLED | NO_PATH | REPLACED")
+                    .f("x", Type.INT).opt("y", Type.INT).f("z", Type.INT).f("reach", Type.INT)
+                    .f("reason", Type.STRING).f("terminal", Type.BOOL),
+            e("nav.progress", "Baritone is still working on the goal and something notable happened "
+                    + "(NEXT_CALC_FAILED, SPLICING_ONTO_NEXT_EARLY, ...). Informational: the goal is "
+                    + "still live, so do NOT treat this as a failure")
+                    .f("x", Type.INT).opt("y", Type.INT).f("z", Type.INT).f("reach", Type.INT)
+                    .f("event", Type.STRING),
+            e("baritone.log", "a line Baritone would have printed to the chat HUD — find results, "
+                    + "eta, 'No known locations of ...', build progress, missing materials")
+                    .f("text", Type.STRING),
             e("auth.prompt", "device-code login: show this to the user (always delivered)")
                     .f("verificationUri", Type.STRING).f("userCode", Type.STRING),
             e("auth.ok", "login succeeded (always delivered)"),
@@ -307,13 +411,27 @@ public final class ApiSchema {
             }
             return true;
         }
+        if (type == Type.OBJECT_ARRAY) {
+            if (!value.isJsonArray()) return false;
+            for (JsonElement e : value.getAsJsonArray()) {
+                if (!e.isJsonObject()) return false;
+            }
+            return true;
+        }
+        if (type == Type.INT_ARRAY || type == Type.DOUBLE_ARRAY) {
+            if (!value.isJsonArray()) return false;
+            for (JsonElement e : value.getAsJsonArray()) {
+                if (type == Type.INT_ARRAY ? !isIntegral(e) : !isNumber(e)) return false;
+            }
+            return true;
+        }
         if (!value.isJsonPrimitive()) return false;
         return switch (type) {
             case INT, LONG -> isIntegral(value);
             case DOUBLE, FLOAT -> isNumber(value);
             case BOOL -> value.getAsJsonPrimitive().isBoolean();
             case STRING -> isString(value);
-            case STRING_ARRAY -> false;
+            case STRING_ARRAY, OBJECT_ARRAY, INT_ARRAY, DOUBLE_ARRAY -> false;
         };
     }
 

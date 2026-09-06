@@ -11,9 +11,29 @@ FIFO="$SDIR/console.in"
 mkdir -p "$ROOT/run/config"; : > "$ROOT/e2e/bench.out"
 
 SRV=""
+
+# --- only ever kill processes THIS script started -------------------------------------
+# `./gradlew runClient` forks the client JVM out of the Gradle daemon, so killing the wrapper
+# leaves the bot running. The obvious workaround — `pkill -f knot.KnotClient` — kills every
+# Fabric client on the machine, including other people's bots and other agents' test runs. It
+# has done exactly that. So: snapshot the matching PIDs before launching anything, and only
+# ever kill PIDs that appeared afterwards.
+CLIENT_PATTERN='knot.KnotClient'
+PRE_EXISTING_CLIENTS="$(pgrep -f "$CLIENT_PATTERN" 2>/dev/null | tr '\n' ' ')"
+
+kill_our_clients() {
+  local pid
+  for pid in $(pgrep -f "$CLIENT_PATTERN" 2>/dev/null); do
+    case " $PRE_EXISTING_CLIENTS " in
+      *" $pid "*) continue ;;   # was already running before we started; not ours to kill
+    esac
+    kill "$pid" 2>/dev/null || true
+  done
+}
+
 cleanup() {
   echo "[bench] cleanup..."
-  pkill -f 'knot.KnotClient' 2>/dev/null || true
+  kill_our_clients
   exec 3>&- 2>/dev/null || true
   [[ -n "$SRV" ]] && kill "$SRV" 2>/dev/null || true
   rm -f "$FIFO"
@@ -35,12 +55,15 @@ done
 grep -q 'Done (' "$SDIR/server.log" 2>/dev/null || { echo "[bench] server start timeout"; exit 1; }
 echo "[bench] server up."
 
-# 2) bot config: offline, auto-connect, software screenshots
+# 2) bot config: offline, auto-connect, software screenshots.
+# Token per run: an unauthenticated bot on localhost is drivable by anything else on the machine.
+CLEF_WS_TOKEN="${CLEF_WS_TOKEN:-$(head -c 18 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=')}"
+export CLEF_WS_TOKEN
 cat > "$ROOT/run/config/mezzoclef.json" <<EOF
 {
   "auth": { "mode": "offline", "offlineUsername": "$BOT" },
   "connection": { "autoConnect": true, "serverHost": "127.0.0.1", "serverPort": 25565 },
-  "control": { "enabled": true, "host": "127.0.0.1", "port": $WS_PORT, "authToken": "" },
+  "control": { "enabled": true, "host": "127.0.0.1", "port": $WS_PORT, "authToken": "$CLEF_WS_TOKEN" },
   "screenshot": { "backend": "software" },
   "headless": true,
   "headlessLoopSleepMs": 5
@@ -61,8 +84,8 @@ run_bot() {  # $1=label  $2=extra gradle args
   done
   echo "op $BOT" >&3; sleep 2     # opped server-side so the bot's /summon etc. execute
   CLEF_WS_PORT="$WS_PORT" CLEF_LABEL="$label" CLEF_WINDOW="$WINDOW" CLEF_SETTLE="$SETTLE" \
-    CLEF_SUMMON="$SUMMON" python3 "$ROOT/scripts/bench_subsystems.py" 2>&1 | tee -a "$ROOT/e2e/bench.out"
-  pkill -f 'knot.KnotClient' 2>/dev/null || true
+    CLEF_SUMMON="$SUMMON" CLEF_WS_TOKEN="$CLEF_WS_TOKEN" python3 "$ROOT/scripts/bench_subsystems.py" 2>&1 | tee -a "$ROOT/e2e/bench.out"
+  kill_our_clients
   kill "$gpid" 2>/dev/null || true
   sleep 6
 }

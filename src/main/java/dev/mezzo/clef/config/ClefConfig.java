@@ -24,6 +24,8 @@ public final class ClefConfig {
     public Connection connection = new Connection();
     public Control control = new Control();
     public Screenshot screenshot = new Screenshot();
+    public EventStream events = new EventStream();
+    public Queries queries = new Queries();
     public boolean headless = true;
     /** Per-loop sleep (ms) while in-world rendering is skipped — keeps idle CPU low. Higher =
      *  lower CPU but slightly more command latency. Must stay well under 50ms to keep 20 TPS. */
@@ -100,6 +102,28 @@ public final class ClefConfig {
         /** Serve a built-in browser dashboard (static page that talks to the control plane). */
         public boolean dashboard = false;
         public int dashboardPort = 8732;
+    }
+
+    /** Tuning for the pushed event stream. Everything here is also gated on someone subscribing. */
+    public static final class EventStream {
+        /** {@code blockUpdate}: only report changes within this many blocks of the bot. */
+        public int blockUpdateRadius = 8;
+        /** {@code entityHurt} / {@code explosion}: only report events within this many blocks. */
+        public double packetRadius = 32.0;
+        /** How many chat lines {@code chatHistory} keeps. */
+        public int chatHistory = 200;
+    }
+
+    /** Limits on the bulk world-query commands, which read the chunk cache on the client thread. */
+    public static final class Queries {
+        /** Hard ceiling on {@code findBlocks}' radius argument. */
+        public int maxFindRadius = 64;
+        /** Hard ceiling on {@code findBlocks}' max argument. */
+        public int maxFindResults = 4096;
+        /** Hard ceiling on {@code blocksIn}'s volume, in blocks. 64^3 by default. */
+        public int maxRegionVolume = 262_144;
+        /** Expansion budget (and hard ceiling on the per-request override) for {@code nav.check}. */
+        public int maxPathCheckNodes = 60_000;
     }
 
     public static final class Screenshot {
@@ -209,6 +233,11 @@ public final class ClefConfig {
 
         String sb = System.getProperty("mezzoclef.screenshot.backend");
         if (sb != null) screenshot.backend = sb;
+
+        String bur = System.getProperty("mezzoclef.events.blockUpdateRadius");
+        if (bur != null) try { events.blockUpdateRadius = Integer.parseInt(bur); } catch (NumberFormatException ignored) {}
+        String chl = System.getProperty("mezzoclef.events.chatHistory");
+        if (chl != null) try { events.chatHistory = Integer.parseInt(chl); } catch (NumberFormatException ignored) {}
     }
 
     public static String generateAuthToken() {

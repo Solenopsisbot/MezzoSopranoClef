@@ -41,10 +41,17 @@ public final class ControlServer implements WsServer.Listener {
     private final AtomicLong commandsFailed = new AtomicLong();
     private final AtomicLong commandTotalNanos = new AtomicLong();
 
+    /**
+     * Commands a {@code read} scoped token may run: anything that only observes. A command belongs
+     * here if running it a thousand times changes nothing about the world, the bot, or the server —
+     * which is why {@code screenshot} qualifies and {@code lookAt} (it turns the head) does not.
+     */
     private static final Set<String> READ_ONLY_COMMANDS = Set.of(
             "ping", "help", "schema", "stats", "subscribe", "unsubscribe", "events",
             "status", "auth.status", "players", "screenshot", "nav.status",
-            "inventory", "entities", "blockAt", "container", "screen", "serverui", "findItem");
+            "inventory", "entities", "blockAt", "container", "screen", "serverui", "findItem",
+            "findBlocks", "blocksIn", "target", "registry", "nav.check",
+            "recipes", "craftable", "chatHistory");
 
     /** Shared service handles (screenshots, navigation) reachable from any command. */
     public final ClefServices services;
@@ -59,6 +66,8 @@ public final class ControlServer implements WsServer.Listener {
         CoreCommands.registerAll(dispatcher);
         dev.mezzo.clef.api.commands.ActionCommands.registerAll(dispatcher);
         dev.mezzo.clef.api.commands.UiCommands.registerAll(dispatcher);
+        dev.mezzo.clef.api.commands.WorldCommands.registerAll(dispatcher);
+        dev.mezzo.clef.api.commands.CraftCommands.registerAll(dispatcher);
         ws.start();
         if (config.control.dashboard) {
             dashboard = new DashboardServer(config.control.host, config.control.dashboardPort, config.control.port);
@@ -298,7 +307,9 @@ public final class ControlServer implements WsServer.Listener {
         return !requiresAuth() || Boolean.TRUE.equals(conn.attributes.get("authed"));
     }
 
-    private boolean allowByScope(WsConnection conn, String cmd) {
+    /** True if this connection's token scope permits {@code cmd}. Public so {@code batch} can
+     *  apply the same rule to each of its sub-commands instead of laundering privilege through it. */
+    public boolean allowByScope(WsConnection conn, String cmd) {
         Object scope = conn.attributes.get("scope");
         return !"read".equals(scope) || READ_ONLY_COMMANDS.contains(cmd);
     }
