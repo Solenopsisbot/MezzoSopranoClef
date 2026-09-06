@@ -1,5 +1,6 @@
 package dev.mezzo.clef;
 
+import dev.mezzo.clef.bot.EventEmitter;
 import net.minecraft.client.Minecraft;
 import net.minecraftforge.client.event.ClientChatReceivedEvent;
 import net.minecraftforge.client.event.ClientPlayerNetworkEvent;
@@ -34,9 +35,13 @@ public final class ClefClient {
         });
 
         gameBus.addListener((ClientChatReceivedEvent e) -> {
-            boolean system = e.getBoundChatType() == null;
-            String sender = system ? null : e.getBoundChatType().name().getString();
-            core.onChatReceived(e.getMessage().getString(), sender, system ? "game" : "chat", false);
+            // Forge has a single chat event; a null bound type is how a system message presents.
+            if (e.getBoundChatType() == null) {
+                core.onSystemMessage(e.getMessage(), false);
+            } else {
+                core.onChatMessage(EventEmitter.kindOf(e.getBoundChatType()),
+                        e.getBoundChatType().name().getString(), e.getMessage());
+            }
         });
 
         gameBus.addListener((ClientPlayerNetworkEvent.LoggingIn e) -> core.onConnected());

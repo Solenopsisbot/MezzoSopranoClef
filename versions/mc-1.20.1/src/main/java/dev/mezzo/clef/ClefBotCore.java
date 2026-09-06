@@ -3,28 +3,20 @@ package dev.mezzo.clef;
 import com.google.gson.JsonObject;
 import dev.mezzo.clef.api.ClefServices;
 import dev.mezzo.clef.api.ControlServer;
+import dev.mezzo.clef.api.Events;
 import dev.mezzo.clef.auth.AuthManager;
 import dev.mezzo.clef.auth.MinecraftSession;
 import dev.mezzo.clef.auth.SessionInjector;
-import dev.mezzo.clef.bot.ActionManager;
-import dev.mezzo.clef.bot.InputController;
+import dev.mezzo.clef.bot.EventEmitter;
 import dev.mezzo.clef.bot.ServerConnector;
-import dev.mezzo.clef.bot.UseController;
 import dev.mezzo.clef.config.ClefConfig;
 import dev.mezzo.clef.headless.HeadlessController;
 import dev.mezzo.clef.nav.BaritoneNavigator;
-import dev.mezzo.clef.nav.Navigator;
-import dev.mezzo.clef.screenshot.ScreenshotService;
 import net.minecraft.client.Minecraft;
+import net.minecraft.network.chat.Component;
 import net.minecraft.client.gui.screens.AccessibilityOnboardingScreen;
 import net.minecraft.client.gui.screens.TitleScreen;
-import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
-import net.minecraft.client.multiplayer.PlayerInfo;
 import net.minecraft.sounds.SoundSource;
-import net.minecraft.world.entity.Entity;
-import net.minecraft.world.entity.EntityType;
-import java.util.HashSet;
-import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -33,16 +25,21 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /**
  * Loader-neutral bot core — assembles the bot:
  * <ol>
- *   <li>Builds services (screenshots, navigation) and starts the WebSocket control plane.</li>
+ *   <li>Builds services (screenshots, navigation, actions, crafting) and starts the WebSocket
+ *       control plane.</li>
  *   <li>Authenticates on a background thread (offline = instant; Microsoft = device code).</li>
  *   <li>Injects the resulting session on the client thread.</li>
  *   <li>Optionally auto-connects to a server once the client has warmed up.</li>
  * </ol>
+ *
+ * <p>The pushed event stream itself lives in {@link EventEmitter}; this class only wires the
+ * sources to it and drives the per-tick subsystems.</p>
  */
 public final class ClefBotCore {
 
     private ControlServer control;
     private ClefServices services;
+    private EventEmitter eventEmitter;
     private volatile boolean authReady = false;
     private final AtomicBoolean connectStarted = new AtomicBoolean(false);
     private int warmupTicks = 0;
@@ -50,27 +47,16 @@ public final class ClefBotCore {
 
     private boolean audioMuted = false;
 
-    // event-emission state (read/written on the client thread)
-    private static final int TICK_EVENT_INTERVAL = 20;   // "tick" state event cadence (~1s)
-    private static final int ENTITY_EVENT_INTERVAL = 10; // entity spawn/remove diff cadence
-    private static final double ENTITY_EVENT_RADIUS = 24.0;
-    private float lastHealth = Float.NaN;
-    private int lastFood = -1;
-    private boolean wasDead = false;
-    private Set<String> lastPlayers;
-    private String lastScreen = "none";
-    private Set<Integer> lastEntities;
-    private int eventTickCounter;
-
     /** Builds the services and starts the control plane. Called by the loader's entrypoint. */
     public void start() {
         ClefConfig cfg = MezzoClef.config();
 
-        ScreenshotService screenshots = new ScreenshotService(cfg);
-        Navigator navigator = new BaritoneNavigator();
-        this.services = new ClefServices(screenshots, navigator, new InputController(), new ActionManager(), new UseController());
+        this.services = ClefServices.standard(cfg);
         ControlServer server = new ControlServer(cfg, services);
         this.control = server;
+        // Packet-sourced events are raised from mixins, which have no route to this object graph.
+        Events.bind(server);
+        this.eventEmitter = new EventEmitter(server, services, cfg);
 
         if (cfg.control.enabled) {
             try {
@@ -80,6 +66,7 @@ public final class ClefBotCore {
                         cfg.control.host, cfg.control.port, e);
             }
         }
+
 
         Thread auth = new Thread(() -> authenticate(cfg), "clef-auth");
         auth.setDaemon(true);
@@ -169,21 +156,20 @@ public final class ClefBotCore {
 
     /** Streams chat + lifecycle events to subscribed control-plane clients. */
     /**
-     * A received chat line. Each loader adapts its own chat event onto this; the shape matches
-     * {@code ChatSink.Listener}, which is what the pre-1.19.3 targets feed from a packet mixin, so
-     * there is one wire contract across every loader and release.
-     *
-     * @param kind    {@code "chat"} for player messages, {@code "game"} for system messages
-     * @param overlay true when the server asked for the action-bar slot (game messages only)
+     * A received chat line. Each loader adapts its own chat event onto this: it knows how to derive
+     * the {@code kind} (Fabric from {@code ChatType.Bound}, NeoForge from its Player/System event
+     * split), and the core stays free of loader types.
      */
-    public void onChatReceived(String text, String sender, String kind, boolean overlay) {
-        if (control == null) return;
-        JsonObject d = new JsonObject();
-        d.addProperty("text", text);
-        if (sender != null) d.addProperty("sender", sender);
-        d.addProperty("kind", kind);
-        if ("game".equals(kind)) d.addProperty("overlay", overlay);
-        control.emitEvent("chat", d);
+    public void onChatMessage(String kind, String sender, Component message) {
+        if (eventEmitter == null) return;
+        eventEmitter.onMessage(kind, sender, message);
+    }
+
+    /** A system message. {@code overlay} is the action-bar slot; it also drives sleep detection. */
+    public void onSystemMessage(Component message, boolean overlay) {
+        if (eventEmitter == null) return;
+        eventEmitter.onMessage(EventEmitter.kindOfSystem(message, overlay), null, message);
+        eventEmitter.onSystemMessageForSleep(message);
     }
 
     /** The client finished joining a world. */
@@ -191,23 +177,20 @@ public final class ClefBotCore {
         if (control != null) control.emitEvent("connected", new JsonObject());
     }
 
-    /** The client left the world; forget the per-connection diff state. */
+    /** The client left the world. */
     public void onDisconnected() {
         if (control != null) control.emitEvent("disconnected", new JsonObject());
-        lastHealth = Float.NaN;
-        lastFood = -1;
-        lastPlayers = null;
-        lastEntities = null;
-        lastScreen = "none";
+        if (eventEmitter != null) eventEmitter.reset();
     }
 
     /** The game is shutting down. */
     public void onStopping() {
+        Events.unbind();
         if (control != null) control.stop();
         if (tokenRefresher != null) tokenRefresher.shutdownNow();
     }
 
-    /** Per-tick driver: actuation, world-state events, then deferred auto-connect. */
+    /** Per-tick driver: actuation, crafting, world-state events, then deferred auto-connect. */
     public void onClientTick(Minecraft mc) {
         // Mute audio cleanly (master volume -> 0) once options exist. We do NOT cancel the sound
         // engine — doing so crashes gameplay sounds (block breaks etc.) on a half-initialised
@@ -223,7 +206,8 @@ public final class ClefBotCore {
         services.input.tick(mc);
         services.actions.tick(mc);
         services.use.tick(mc);
-        emitWorldEvents(mc);
+        services.craft.tick(mc);
+        eventEmitter.tick(mc);
 
         // First-ever launch shows a one-time accessibility onboarding screen BEFORE the title;
         // a headless bot has no GUI to dismiss it, so do it ourselves (and stop it re-showing).
@@ -256,139 +240,6 @@ public final class ClefBotCore {
             } catch (Throwable t) {
                 MezzoClef.LOG.error("Auto-connect failed", t);
             }
-        }
-    }
-
-    /**
-     * Emits the world/state event stream to subscribers: screenOpen/screenClose, health, damage,
-     * death, respawn, a throttled tick snapshot, player join/leave, and nearby entitySpawn/remove.
-     * The expensive sources (tick snapshot, entity diff) only run when something is subscribed.
-     */
-    private void emitWorldEvents(Minecraft mc) {
-        if (control == null) return;
-
-        // screen open/close (handy for UI automation — react to a chest/furnace/trade opening)
-        String screen = mc.screen != null ? mc.screen.getClass().getSimpleName() : "none";
-        if (!screen.equals(lastScreen)) {
-            JsonObject d = new JsonObject();
-            d.addProperty("screen", screen);
-            if (!"none".equals(screen) && mc.screen instanceof AbstractContainerScreen) {
-                control.emitEvent("screenOpen", d);
-            } else if ("none".equals(screen)) {
-                control.emitEvent("screenClose", d);
-            }
-            lastScreen = screen;
-        }
-
-        if (mc.player == null || mc.level == null) return;
-        eventTickCounter++;
-
-        float hp = mc.player.getHealth();
-        int food = mc.player.getFoodData().getFoodLevel();
-        float prevHp = lastHealth;
-        if (hp != lastHealth || food != lastFood) {
-            JsonObject d = new JsonObject();
-            d.addProperty("health", hp);
-            d.addProperty("food", food);
-            control.emitEvent("health", d);
-        }
-        if (!Float.isNaN(prevHp) && hp < prevHp) {
-            JsonObject d = new JsonObject();
-            d.addProperty("amount", prevHp - hp);
-            d.addProperty("health", hp);
-            control.emitEvent("damage", d);
-        }
-        lastHealth = hp;
-        lastFood = food;
-
-        boolean dead = hp <= 0f;
-        if (dead && !wasDead) {
-            wasDead = true;
-            control.emitEvent("death", new JsonObject());
-            if (MezzoClef.config().connection.autoRespawn) {
-                try {
-                    mc.player.respawn();
-                } catch (Throwable t) {
-                    MezzoClef.LOG.warn("Auto-respawn failed: {}", t.toString());
-                }
-            }
-        } else if (!dead) {
-            if (wasDead) control.emitEvent("respawn", new JsonObject());
-            wasDead = false;
-        }
-
-        // throttled position/state snapshot — only computed if someone subscribes to "tick"
-        if (eventTickCounter % TICK_EVENT_INTERVAL == 0 && control.hasSubscribers("tick")) {
-            JsonObject d = new JsonObject();
-            d.addProperty("x", mc.player.getX());
-            d.addProperty("y", mc.player.getY());
-            d.addProperty("z", mc.player.getZ());
-            d.addProperty("yaw", mc.player.getYRot());
-            d.addProperty("pitch", mc.player.getXRot());
-            d.addProperty("health", hp);
-            d.addProperty("food", food);
-            d.addProperty("dimension", mc.level.dimension().location().toString());
-            control.emitEvent("tick", d);
-        }
-
-        // player join/leave (tab-list diff)
-        if (eventTickCounter % 10 == 0 && mc.getConnection() != null) {
-            Set<String> current = new HashSet<>();
-            for (PlayerInfo e : mc.getConnection().getOnlinePlayers()) {
-                current.add(e.getProfile().getName());
-            }
-            if (lastPlayers != null) {
-                for (String name : current) {
-                    if (!lastPlayers.contains(name)) {
-                        JsonObject d = new JsonObject();
-                        d.addProperty("name", name);
-                        control.emitEvent("join", d);
-                    }
-                }
-                for (String name : lastPlayers) {
-                    if (!current.contains(name)) {
-                        JsonObject d = new JsonObject();
-                        d.addProperty("name", name);
-                        control.emitEvent("leave", d);
-                    }
-                }
-            }
-            lastPlayers = current;
-        }
-
-        // nearby entity spawn/remove (expensive scan — only if subscribed)
-        if (eventTickCounter % ENTITY_EVENT_INTERVAL == 0
-                && (control.hasSubscribers("entitySpawn") || control.hasSubscribers("entityRemove"))) {
-            Set<Integer> current = new HashSet<>();
-            java.util.Map<Integer, Entity> byId = new java.util.HashMap<>();
-            double r2 = ENTITY_EVENT_RADIUS * ENTITY_EVENT_RADIUS;
-            for (Entity e : mc.level.entitiesForRendering()) {
-                if (e == mc.player || e.distanceToSqr(mc.player) > r2) continue;
-                current.add(e.getId());
-                byId.put(e.getId(), e);
-            }
-            if (lastEntities != null) {
-                for (Integer id : current) {
-                    if (!lastEntities.contains(id)) {
-                        Entity e = byId.get(id);
-                        JsonObject d = new JsonObject();
-                        d.addProperty("id", id);
-                        d.addProperty("type", EntityType.getKey(e.getType()).toString());
-                        d.addProperty("x", e.getX());
-                        d.addProperty("y", e.getY());
-                        d.addProperty("z", e.getZ());
-                        control.emitEvent("entitySpawn", d);
-                    }
-                }
-                for (Integer id : lastEntities) {
-                    if (!current.contains(id)) {
-                        JsonObject d = new JsonObject();
-                        d.addProperty("id", id);
-                        control.emitEvent("entityRemove", d);
-                    }
-                }
-            }
-            lastEntities = current;
         }
     }
 }

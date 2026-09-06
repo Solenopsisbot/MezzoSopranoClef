@@ -34,6 +34,9 @@ auth-cache.json
 # verification reports for both the server matrix and the native per-version client matrix.
 # Everything under e2e/ is produced by the scripts; none of it belongs in the repo.
 e2e/
+# Extra isolated harnesses: e2e.sh takes SERVER_DIR/MC_PORT/WS_PORT so a second run (or
+# verify_agent_api.py) can live beside the default one without fighting over ports or a world.
+e2e-*/
 
 # Run logs + Python probe/benchmark bytecode caches
 logs/

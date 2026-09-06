@@ -84,6 +84,9 @@ def main():
     summon = int(os.environ.get("CLEF_SUMMON", "48"))
     mobs = os.environ.get("CLEF_MOBS", "zombie,skeleton,creeper,spider,cow,sheep,pig,chicken").split(",")
     s = handshake("127.0.0.1", port, 15)
+    token = os.environ.get("CLEF_WS_TOKEN")
+    if token:
+        assert call(s, "hello", token=token)["authed"]
     call(s, "ping")
 
     end = time.time() + float(os.environ.get("CLEF_WORLD_TIMEOUT", "150"))

@@ -80,6 +80,43 @@ class SoftwareRaycasterTest {
         assertTrue(g > r && g > b, "nearer block should occlude the entity, got #" + Integer.toHexString(hit));
     }
 
+    // ---- orthographic (topdown map) mode --------------------------------------------
+
+    /**
+     * The point of the ortho camera: parallel rays. A single 1×1 column of blocks far from the
+     * image centre must still be hit, and hit at the pixel directly above it — under perspective it
+     * would be squashed towards the vanishing point and missed entirely at this distance.
+     */
+    @Test
+    void orthographicRaysAreParallelSoOffCentreColumnsStillRender() {
+        int green = 0xFF3CB043;
+        VoxelView pillar = (x, y, z) -> (x == 12 && z == 0 && y <= 64) ? green : 0;
+        // 32 blocks tall viewport, square image, camera 40 above the pillar top and centred on x=0.
+        RenderCamera cam = new RenderCamera(0.5, 104, 0.5, 180f, 90f, 70f, 64, 64, 128, 32);
+        int[] px = SoftwareRaycaster.render(pillar, cam, SKY, SKY);
+
+        // East is +X and to the right: 12 blocks east on a 32-block-wide viewport is 12/32 of the
+        // half-width past centre, i.e. 3/8 of the way from the middle to the right edge.
+        int column = (int) Math.round(32 + 12.0 / 32.0 * 64);
+        int hit = px[32 * 64 + Math.min(63, column)];
+        int r = (hit >> 16) & 0xFF, g = (hit >> 8) & 0xFF, b = hit & 0xFF;
+        assertTrue(g > r && g > b,
+                "off-centre pillar should render at its own column, got #" + Integer.toHexString(hit));
+        assertEquals(SKY, px[32 * 64 + 32], "nothing directly under the camera, so sky");
+    }
+
+    @Test
+    void orthographicViewportCoversExactlyOrthoHeightBlocks() {
+        int green = 0xFF3CB043;
+        // A flat floor spanning z in [-15, 15] only: the 32-block viewport should see its edges.
+        VoxelView strip = (x, y, z) -> (y <= 64 && z >= -15 && z <= 15) ? green : 0;
+        RenderCamera cam = new RenderCamera(0.5, 104, 0.5, 180f, 90f, 70f, 64, 64, 128, 32);
+        int[] px = SoftwareRaycaster.render(strip, cam, SKY, SKY);
+        assertNotEquals(SKY, px[32 * 64 + 32], "the middle of the strip is floor");
+        // North is up: the top row looks at z ≈ 0.5 - 16, which is outside the strip.
+        assertEquals(SKY, px[32], "the top row falls off the end of the strip");
+    }
+
     private static int center(int[] px, int w, int h) {
         return px[(h / 2) * w + (w / 2)];
     }

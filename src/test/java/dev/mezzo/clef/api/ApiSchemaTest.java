@@ -7,7 +7,9 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import dev.mezzo.clef.api.commands.ActionCommands;
 import dev.mezzo.clef.api.commands.CoreCommands;
+import dev.mezzo.clef.api.commands.CraftCommands;
 import dev.mezzo.clef.api.commands.UiCommands;
+import dev.mezzo.clef.api.commands.WorldCommands;
 import org.junit.jupiter.api.Test;
 
 import java.nio.file.Files;
@@ -30,6 +32,8 @@ class ApiSchemaTest {
         CoreCommands.registerAll(d);
         ActionCommands.registerAll(d);
         UiCommands.registerAll(d);
+        WorldCommands.registerAll(d);
+        CraftCommands.registerAll(d);
         return d;
     }
 

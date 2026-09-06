@@ -39,10 +39,10 @@ import time
 from collections import deque
 from typing import Any, Deque, Dict, Iterator, List, Optional, Tuple
 
-__all__ = ["ClefClient", "ClefError", "SUPPORTED_PROTOCOL"]
+__all__ = ["ClefClient", "ClefError", "SUPPORTED_PROTOCOL", "decode_blocks_in"]
 
 # Highest control protocol this client was written against (see welcome.protocol / schema.protocol).
-SUPPORTED_PROTOCOL = 1
+SUPPORTED_PROTOCOL = 2
 
 _WS_MAGIC = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
@@ -262,11 +262,22 @@ class ClefClient:
     def players(self) -> List[Dict[str, Any]]:
         return self.call("players")
 
-    def goto(self, x: int, z: int, y: Optional[int] = None) -> Dict[str, Any]:
-        return self.call("goto", x=x, z=z, **({"y": y} if y is not None else {}))
+    def goto(self, x: int, z: int, y: Optional[int] = None, reach: int = 1) -> Dict[str, Any]:
+        """Start pathing. Returns as soon as Baritone accepts the goal — completion arrives as a
+        ``nav.done`` or ``nav.failed`` event, so subscribe to those instead of polling."""
+        args: Dict[str, Any] = {"x": x, "z": z, "reach": reach}
+        if y is not None:
+            args["y"] = y
+        return self.call("goto", **args)
 
-    def baritone(self, command: str) -> Dict[str, Any]:
-        return self.call("baritone", command=command)
+    def baritone(self, command: str, collect_ms: int = 250) -> Dict[str, Any]:
+        """Run any Baritone command and return ``{"ran", "backend", "output": [lines]}``.
+
+        ``output`` is what Baritone printed within ``collect_ms`` — the only way to read the result
+        of ``find``, ``eta`` or "No known locations of ...", which otherwise go to a chat HUD a
+        headless bot doesn't have. Commands naming a block are safe; the bot refuses them outright
+        if it couldn't pre-initialise Baritone's block-argument support off the client thread."""
+        return self.call("baritone", command=command, collectMs=collect_ms)
 
     def nav_stop(self) -> Dict[str, Any]:
         return self.call("nav.stop")
@@ -278,11 +289,25 @@ class ClefClient:
     def stop_move(self) -> Dict[str, Any]:
         return self.call("stopMove")
 
-    def mine(self, x: int, y: int, z: int, face: Optional[str] = None) -> Dict[str, Any]:
-        return self.call("mine", x=x, y=y, z=z, **({"face": face} if face else {}))
+    def mine(self, x: int, y: int, z: int, face: Optional[str] = None,
+             wait: bool = False) -> Dict[str, Any]:
+        """Break a block. With ``wait`` the call blocks until it is broken or refused and returns
+        ``{"broken": bool, "reason": ...}``; otherwise subscribe to the ``mineDone`` event."""
+        args: Dict[str, Any] = {"x": x, "y": y, "z": z, "wait": wait}
+        if face:
+            args["face"] = face
+        return self.call("mine", **args)
 
-    def place(self, x: int, y: int, z: int, face: Optional[str] = None) -> Dict[str, Any]:
-        return self.call("place", x=x, y=y, z=z, **({"face": face} if face else {}))
+    def place(self, x: int, y: int, z: int, face: Optional[str] = None,
+              item: Optional[str] = None, confirm: bool = True) -> Dict[str, Any]:
+        """Place against a block face. ``item`` selects it first (swapping it onto the hotbar if
+        needed); ``placed`` is verified against the world, not assumed from the click."""
+        args: Dict[str, Any] = {"x": x, "y": y, "z": z, "confirm": confirm}
+        if face:
+            args["face"] = face
+        if item:
+            args["item"] = item
+        return self.call("place", **args)
 
     def break_block(self, x: int, y: int, z: int) -> Dict[str, Any]:
         return self.call("breakBlock", x=x, y=y, z=z)
@@ -299,16 +324,120 @@ class ClefClient:
     def inventory(self) -> Dict[str, Any]:
         return self.call("inventory")
 
-    def entities(self, radius: Optional[float] = None) -> List[Dict[str, Any]]:
-        return self.call("entities", **({"radius": radius} if radius is not None else {}))
+    def entities(self, radius: Optional[float] = None,
+                 kinds: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        """Nearby entities with health, hostility, held item and trade data. ``kinds`` filters by
+        entity type id (bare names allowed), e.g. ``kinds=["zombie", "skeleton"]``."""
+        args: Dict[str, Any] = {}
+        if radius is not None:
+            args["radius"] = radius
+        if kinds is not None:
+            args["kinds"] = kinds
+        return self.call("entities", **args)
 
     def block_at(self, x: int, y: int, z: int) -> Dict[str, Any]:
         return self.call("blockAt", x=x, y=y, z=z)
 
     def screenshot(self, timeout: float = 60.0, **opts: Any) -> bytes:
-        """Render a PNG and return its raw bytes. opts: x,y,z,yaw,pitch,width,height,fov."""
+        """Render a PNG and return its raw bytes.
+
+        opts: x,y,z,yaw,pitch,width,height,fov for the free camera; mode="topdown" with
+        centerX/centerZ/radius for an orthographic map; annotate=True to also get boxes
+        (use :meth:`screenshot_annotated` if you want them)."""
         res = self.call("screenshot", timeout=timeout, **opts)
         return base64.b64decode(res["base64"])
+
+    def screenshot_annotated(self, timeout: float = 60.0, **opts: Any) -> Tuple[bytes, Dict[str, Any]]:
+        """Render a PNG and also return ``{"camera": ..., "entities": [...]}`` — the camera
+        parameters and the screen-space box of every visible entity, for drawing labels."""
+        res = self.call("screenshot", timeout=timeout, annotate=True, **opts)
+        meta = {"camera": res.get("camera"), "entities": res.get("entities", [])}
+        return base64.b64decode(res["base64"]), meta
+
+    def map(self, radius: int = 32, timeout: float = 60.0, **opts: Any) -> bytes:
+        """Orthographic top-down map PNG, east-right and north-up, centred on the bot."""
+        return self.screenshot(timeout=timeout, mode="topdown", radius=radius, **opts)
+
+    # ---- world queries -------------------------------------------------------------
+
+    def find_blocks(
+        self,
+        ids: List[str],
+        radius: int = 32,
+        max: int = 32,
+        sort: str = "nearest",
+    ) -> List[Dict[str, Any]]:
+        """Nearest matching blocks in the loaded chunks. ``ids`` accepts block ids and
+        ``#tag`` names, e.g. ``["#minecraft:logs"]``."""
+        return self.call("findBlocks", ids=ids, radius=radius, max=max, sort=sort)
+
+    def blocks_in(self, min_xyz: Tuple[int, int, int], max_xyz: Tuple[int, int, int],
+                  palette: bool = True) -> Dict[str, Any]:
+        """Dense readout of a block cuboid. With ``palette`` (the default) the result carries a
+        palette plus base64 varint indices; see :func:`decode_blocks_in`."""
+        return self.call(
+            "blocksIn",
+            minX=min_xyz[0], minY=min_xyz[1], minZ=min_xyz[2],
+            maxX=max_xyz[0], maxY=max_xyz[1], maxZ=max_xyz[2],
+            palette=palette,
+        )
+
+    def target(self, max_distance: float = 4.5, fluids: bool = False) -> Dict[str, Any]:
+        return self.call("target", maxDistance=max_distance, fluids=fluids)
+
+    def registry(self, *kinds: str, tags: bool = False) -> Dict[str, Any]:
+        args: Dict[str, Any] = {"tags": tags}
+        if kinds:
+            args["kinds"] = list(kinds)
+        return self.call("registry", **args)
+
+    # ---- navigation ----------------------------------------------------------------
+
+    def nav_check(self, x: int, y: int, z: int, reach: int = 1,
+                  max_nodes: Optional[int] = None) -> Dict[str, Any]:
+        """Cheap walkability **estimate** — a walk-only A* over loaded chunks, not Baritone's
+        planner. Nothing moves. Branch on ``verdict`` (``reachable`` / ``unreachable`` /
+        ``unknown``): ``unknown`` means the search hit its node budget, which is not the same as
+        proving there is no route."""
+        args: Dict[str, Any] = {"x": x, "y": y, "z": z, "reach": reach}
+        if max_nodes is not None:
+            args["maxNodes"] = max_nodes
+        return self.call("nav.check", **args)
+
+    def look_at(self, x: Optional[float] = None, y: Optional[float] = None,
+                z: Optional[float] = None, entity_id: Optional[int] = None) -> Dict[str, Any]:
+        if entity_id is not None:
+            return self.call("lookAt", entityId=entity_id)
+        return self.call("lookAt", x=x, y=y, z=z)
+
+    # ---- crafting ------------------------------------------------------------------
+
+    def craft(self, item: str, count: int = 1, all: bool = False) -> Dict[str, Any]:
+        """Craft using the open crafting screen, else the 2x2 player grid. Blocks until done."""
+        return self.call("craft", item=item, count=count, all=all)
+
+    def recipes(self, item: str) -> List[Dict[str, Any]]:
+        return self.call("recipes", item=item)
+
+    def craftable(self) -> Dict[str, Any]:
+        return self.call("craftable")
+
+    def move_to_hotbar(self, item: str, slot: Optional[int] = None) -> Dict[str, Any]:
+        return self.call("moveToHotbar", item=item, **({"slot": slot} if slot is not None else {}))
+
+    # ---- chat ----------------------------------------------------------------------
+
+    def chat_history(self, limit: int = 50) -> Dict[str, Any]:
+        return self.call("chatHistory", limit=limit)
+
+    def whisper(self, player: str, text: str) -> Dict[str, Any]:
+        """Private-message a player using whichever of msg/tell/w/whisper this server has."""
+        return self.call("whisper", player=player, text=text)
+
+    def batch(self, commands: List[Dict[str, Any]], continue_on_error: bool = False) -> Dict[str, Any]:
+        """Run several commands in order over one round-trip:
+        ``bot.batch([{"cmd": "setSlot", "args": {"slot": 0}}, {"cmd": "use", "args": {}}])``"""
+        return self.call("batch", commands=commands, continueOnError=continue_on_error)
 
     # ---- WebSocket frame plumbing (RFC 6455, client frames masked) ------------------
 
@@ -375,6 +504,34 @@ class ClefClient:
             header.append(0x80 | 127)
             header += struct.pack(">Q", n)
         self._sock.sendall(bytes(header) + mask + masked)
+
+
+def decode_blocks_in(result: Dict[str, Any]) -> List[str]:
+    """Expands a palette-encoded :meth:`ClefClient.blocks_in` result into a flat list of block ids.
+
+    The order is x-major — ``i = ((x-minX)*sizeY + (y-minY))*sizeZ + (z-minZ)`` — matching the
+    ``order`` field the bot returns. Blocks in chunks the server has not sent read as
+    ``"unloaded"``, which is not the same thing as air."""
+    if "blocks" in result:
+        return list(result["blocks"])
+    palette = result["palette"]
+    size_x, size_y, size_z = result["size"]
+    data = base64.b64decode(result["data"])
+    out: List[str] = []
+    value = 0
+    shift = 0
+    for byte in data:
+        value |= (byte & 0x7F) << shift
+        if byte & 0x80:
+            shift += 7
+            continue
+        out.append(palette[value])
+        value = 0
+        shift = 0
+    expected = size_x * size_y * size_z
+    if len(out) != expected:
+        raise ValueError(f"decoded {len(out)} blocks, expected {expected}")
+    return out
 
 
 if __name__ == "__main__":

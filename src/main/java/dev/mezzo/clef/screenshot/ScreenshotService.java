@@ -47,13 +47,46 @@ public final class ScreenshotService {
     /** position + look direction for a one-shot GL capture. */
     public record CameraOverride(double x, double y, double z, float yaw, float pitch) {}
 
-    /** Null fields fall back to the player's current eye position / rotation / configured FOV. */
+    /**
+     * Null fields fall back to the player's current eye position / rotation / configured FOV.
+     *
+     * @param mode      {@code "normal"} (default) for the free-flying perspective camera, or
+     *                  {@code "topdown"} for an orthographic map looking straight down
+     * @param centerX   topdown only: map centre, defaulting to the player
+     * @param centerZ   topdown only: map centre, defaulting to the player
+     * @param radius    topdown only: how many blocks the map covers north/south of the centre
+     * @param annotate  also return the camera parameters and screen-space entity boxes
+     */
     public record CaptureRequest(Double x, Double y, Double z,
                                  Float yaw, Float pitch,
-                                 Integer width, Integer height, Float fov) {}
+                                 Integer width, Integer height, Float fov,
+                                 String mode, Double centerX, Double centerZ, Integer radius,
+                                 boolean annotate) {
+
+        /** Plain perspective capture — the shape every caller used before topdown/annotate existed. */
+        public CaptureRequest(Double x, Double y, Double z, Float yaw, Float pitch,
+                              Integer width, Integer height, Float fov) {
+            this(x, y, z, yaw, pitch, width, height, fov, null, null, null, null, false);
+        }
+
+        public boolean topDown() {
+            return "topdown".equalsIgnoreCase(mode);
+        }
+    }
 
     public record CaptureMetrics(String backend, int width, int height, int bytes,
                                  double totalMs, double snapshotMs, double renderMs, double pngMs) {}
+
+    /** One entity's screen-space footprint, for callers that want to draw labels on the PNG. */
+    public record Annotation(int id, String type, double minX, double minY, double maxX, double maxY,
+                             double depth, boolean visible) {}
+
+    /**
+     * A capture plus, when {@link CaptureRequest#annotate} was set, everything needed to draw on top
+     * of it: the resolved camera and the entity boxes as they landed in image space.
+     */
+    public record Capture(byte[] png, CaptureMetrics metrics, RenderCamera camera,
+                          java.util.List<Annotation> annotations) {}
 
     private static volatile CameraOverride ACTIVE_OVERRIDE;
 
@@ -86,11 +119,27 @@ public final class ScreenshotService {
 
     /** Capture a PNG. Safe to call from any thread; bounces to the client thread internally. */
     public byte[] capture(CaptureRequest req) throws Exception {
+        return captureAnnotated(req).png();
+    }
+
+    /**
+     * Capture a PNG plus (optionally) its camera and entity annotations. Safe to call from any
+     * thread; bounces to the client thread internally.
+     */
+    public Capture captureAnnotated(CaptureRequest req) throws Exception {
         if (!captureSlot.tryAcquire()) {
             throw new IllegalStateException("a screenshot is already in progress");
         }
         try {
-            return backend().equals("gl") ? captureGl(req) : captureSoftware(req);
+            if (backend().equals("gl")) {
+                if (req.topDown()) {
+                    throw new IllegalArgumentException(
+                            "mode=topdown is a software-backend camera; set screenshot.backend=software");
+                }
+                byte[] png = captureGl(req);
+                return new Capture(png, lastMetrics, null, java.util.List.of());
+            }
+            return captureSoftware(req);
         } finally {
             captureSlot.release();
         }
@@ -101,7 +150,7 @@ public final class ScreenshotService {
     private record Snapshot(RenderCamera cam, ArrayVoxelView view, List<EntityBox> entities,
                             int skyTop, int skyBottom) {}
 
-    private byte[] captureSoftware(CaptureRequest req) throws Exception {
+    private Capture captureSoftware(CaptureRequest req) throws Exception {
         Minecraft mc = Minecraft.getInstance();
         CompletableFuture<Snapshot> snapFuture = new CompletableFuture<>();
         long totalStart = System.nanoTime();
@@ -122,13 +171,32 @@ public final class ScreenshotService {
         long renderEnd = System.nanoTime();
         byte[] png = PngEncoder.toPng(argb, s.cam().width(), s.cam().height());
         long pngEnd = System.nanoTime();
-        lastMetrics = new CaptureMetrics("software", s.cam().width(), s.cam().height(), png.length,
+        CaptureMetrics metrics = new CaptureMetrics("software", s.cam().width(), s.cam().height(), png.length,
                 nanosToMs(pngEnd - totalStart), nanosToMs(snapshotEnd - snapshotStart),
                 nanosToMs(renderEnd - renderStart), nanosToMs(pngEnd - renderEnd));
+        lastMetrics = metrics;
         MezzoClef.LOG.debug("Software screenshot {}x{} ({} bytes) at ({},{},{}) yaw={} pitch={}",
                 s.cam().width(), s.cam().height(), png.length,
                 s.cam().x(), s.cam().y(), s.cam().z(), s.cam().yaw(), s.cam().pitch());
-        return png;
+        return new Capture(png, metrics, s.cam(),
+                req.annotate() ? annotate(s.cam(), s.entities()) : java.util.List.of());
+    }
+
+    /**
+     * Projects each rendered entity box into image space. Done here rather than client-side because
+     * only we know the exact basis the raycaster used, and re-deriving it from yaw/pitch is the kind
+     * of thing that is subtly wrong for months.
+     */
+    private static java.util.List<Annotation> annotate(RenderCamera cam, List<EntityBox> entities) {
+        dev.mezzo.clef.render.CameraProjection projection = new dev.mezzo.clef.render.CameraProjection(cam);
+        java.util.List<Annotation> out = new java.util.ArrayList<>(entities.size());
+        for (EntityBox box : entities) {
+            var screen = projection.projectBox(box.minX(), box.minY(), box.minZ(),
+                    box.maxX(), box.maxY(), box.maxZ());
+            out.add(new Annotation(box.id(), box.type(), screen.minX(), screen.minY(),
+                    screen.maxX(), screen.maxY(), screen.depth(), screen.visible()));
+        }
+        return out;
     }
 
     /** Runs on the client thread: resolves the camera and snapshots the surrounding blocks. */
@@ -138,6 +206,27 @@ public final class ScreenshotService {
             throw new IllegalStateException("not in a world — connect to a server first");
         }
         Entity camEntity = mc.getCameraEntity() != null ? mc.getCameraEntity() : mc.player;
+        int width = clamp(req.width() != null ? req.width() : config.screenshot.defaultWidth,
+                1, config.screenshot.maxWidth);
+        int height = clamp(req.height() != null ? req.height() : config.screenshot.defaultHeight,
+                1, config.screenshot.maxHeight);
+        validatePixelBudget(width, height);
+
+        RenderCamera cam = req.topDown()
+                ? topDownCamera(world, camEntity, req, width, height)
+                : freeCamera(world, camEntity, req, width, height);
+
+        ArrayVoxelView view = WorldSnapshotter.snapshotBlocks(world, cam.x(), cam.y(), cam.z(), (int) cam.maxDistance());
+        List<EntityBox> entities = WorldSnapshotter.snapshotEntities(
+                world, req.topDown() ? null : camEntity, cam.x(), cam.y(), cam.z(),
+                (int) cam.maxDistance(), Math.max(0, config.screenshot.maxEntities));
+        int sky = WorldSnapshotter.skyColor(world, new Vec3(cam.x(), cam.y(), cam.z()));
+        return new Snapshot(cam, view, entities, sky, lightenTowardWhite(sky, 0.35));
+    }
+
+    /** The normal camera: player eye position and rotation unless the request overrides them. */
+    private RenderCamera freeCamera(ClientLevel world, Entity camEntity, CaptureRequest req,
+                                    int width, int height) {
         boolean haveFullPos = req.x() != null && req.y() != null && req.z() != null;
         if (camEntity == null && !haveFullPos) {
             throw new IllegalStateException("no player/camera entity to derive position from");
@@ -149,21 +238,47 @@ public final class ScreenshotService {
         double z = req.z() != null ? req.z() : eye.z;
         float yaw = req.yaw() != null ? req.yaw() : (camEntity != null ? camEntity.getYRot() : 0f);
         float pitch = req.pitch() != null ? req.pitch() : (camEntity != null ? camEntity.getXRot() : 0f);
-
-        int width = clamp(req.width() != null ? req.width() : config.screenshot.defaultWidth,
-                1, config.screenshot.maxWidth);
-        int height = clamp(req.height() != null ? req.height() : config.screenshot.defaultHeight,
-                1, config.screenshot.maxHeight);
-        validatePixelBudget(width, height);
         float fov = clampFov(req.fov() != null ? req.fov() : config.screenshot.defaultFov);
         int radius = clampRadiusToSnapshotBudget(world, x, y, z, clamp(config.screenshot.maxRayDistance, 8, 192));
+        return new RenderCamera(x, y, z, yaw, pitch, fov, width, height, radius);
+    }
 
-        ArrayVoxelView view = WorldSnapshotter.snapshotBlocks(world, x, y, z, radius);
-        List<EntityBox> entities = WorldSnapshotter.snapshotEntities(
-                world, camEntity, x, y, z, radius, Math.max(0, config.screenshot.maxEntities));
-        int sky = WorldSnapshotter.skyColor(world, new Vec3(x, y, z));
-        RenderCamera cam = new RenderCamera(x, y, z, yaw, pitch, fov, width, height, radius);
-        return new Snapshot(cam, view, entities, sky, lightenTowardWhite(sky, 0.35));
+    /**
+     * An orthographic map camera hanging straight above {@code centerX/centerZ}, oriented
+     * <b>east-right, north-up</b> like every other map you have ever read.
+     *
+     * <p>The viewport is {@code 2 * radius} blocks tall and follows the aspect ratio horizontally,
+     * so a block covers the same pixels in every corner of the image.</p>
+     *
+     * <p>The yaw of 180° is load-bearing and worth explaining. Looking straight down, the camera's
+     * forward vector is (0,-1,0) and the "right" axis is derived by crossing it with world up —
+     * which is very nearly the zero vector, so which way is right comes down to the residue of
+     * cos(90°). At yaw 0 that lands on {@code right = -X}, producing a map that is west-right and
+     * south-up: correct, and upside down. Yaw 180 flips it to the conventional orientation.
+     * {@code CameraProjectionTest} pins this, so it can't silently invert.</p>
+     */
+    private RenderCamera topDownCamera(ClientLevel world, Entity camEntity, CaptureRequest req,
+                                       int width, int height) {
+        if (camEntity == null && (req.centerX() == null || req.centerZ() == null)) {
+            throw new IllegalStateException("topdown needs centerX/centerZ when there is no player");
+        }
+        double centerX = req.centerX() != null ? req.centerX() : camEntity.getX();
+        double centerZ = req.centerZ() != null ? req.centerZ() : camEntity.getZ();
+        double groundY = req.y() != null ? req.y() : (camEntity != null ? camEntity.getY() : 64);
+        int radius = clamp(req.radius() != null ? req.radius() : 32, 1, config.screenshot.maxRayDistance);
+
+        // Sit far enough above the ground that terrain (and any hill between us and it) is in front
+        // of the camera, not behind it.
+        double eyeY = groundY + radius + 32;
+        double aspect = (double) width / (double) height;
+        // The snapshot cube is centred on the camera, so it has to reach both sideways to the map
+        // edge and downward past the ground.
+        int needed = (int) Math.ceil(Math.max(radius * aspect, eyeY - (groundY - 32))) + 2;
+        int snapshotRadius = clampRadiusToSnapshotBudget(world, centerX, eyeY, centerZ,
+                clamp(needed, 8, 192));
+        return new RenderCamera(centerX, eyeY, centerZ, 180f, 90f,
+                clampFov(config.screenshot.defaultFov), width, height,
+                snapshotRadius, radius * 2.0);
     }
 
     // ===== gl backend (high fidelity, needs a GL context) ============================

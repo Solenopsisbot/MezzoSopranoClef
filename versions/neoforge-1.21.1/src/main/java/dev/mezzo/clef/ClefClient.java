@@ -1,5 +1,6 @@
 package dev.mezzo.clef;
 
+import dev.mezzo.clef.bot.EventEmitter;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.neoforge.client.event.ClientChatReceivedEvent;
 import net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent;
@@ -44,10 +45,10 @@ public final class ClefClient {
             // getSender() is a UUID here, so resolve the display name off the bound chat type,
             // which the server already filled in with the speaker's name.
             String sender = e.getBoundChatType() != null ? e.getBoundChatType().name().getString() : null;
-            core.onChatReceived(e.getMessage().getString(), sender, "chat", false);
+            core.onChatMessage(EventEmitter.kindOf(e.getBoundChatType()), sender, e.getMessage());
         });
         gameBus.addListener(ClientChatReceivedEvent.System.class,
-                e -> core.onChatReceived(e.getMessage().getString(), null, "game", e.isOverlay()));
+                e -> core.onSystemMessage(e.getMessage(), e.isOverlay()));
 
         gameBus.addListener(ClientPlayerNetworkEvent.LoggingIn.class, e -> core.onConnected());
         gameBus.addListener(ClientPlayerNetworkEvent.LoggingOut.class, e -> core.onDisconnected());

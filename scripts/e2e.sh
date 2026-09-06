@@ -15,7 +15,12 @@
 #      SERVER_JAVA (java binary used to run the server; default = auto-picked for MC_VERSION),
 #      CLEF_RUN_TASK (gradle task that boots the bot; default `runClient` = the newest-version
 #        client. Use e.g. `:versions:fabric-1.21.11:runClient` to test a native older build),
-#      CLEF_RUN_DIR (that task's run directory; default `run`).
+#      CLEF_RUN_DIR (that task's run directory; default `run`),
+#      MC_PORT (25565), SERVER_DIR (default e2e/servers/$MC_VERSION).
+#
+# Set MC_PORT + WS_PORT + SERVER_DIR to run this beside another instance (or beside somebody
+# else's bot) without fighting over ports or a world directory. Nothing here kills by process
+# name — only the PIDs it started — so a stray run can't take out an unrelated client.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -24,11 +29,12 @@ CLIENT_VERSION="$(sed -n 's/^minecraft_version=//p' "$ROOT/gradle.properties")"
 MC_VERSION="${MC_VERSION:-$CLIENT_VERSION}"
 SERVER_VERSION="${SERVER_VERSION:-$MC_VERSION}"
 WS_PORT="${WS_PORT:-8731}"
+MC_PORT="${MC_PORT:-25565}"
 BOT_NAME="${BOT_NAME:-ClefBot}"
 SERVER_JAVA="${SERVER_JAVA:-$(python3 "$ROOT/scripts/pick_server_java.py" "$MC_VERSION")}"
 CLEF_RUN_TASK="${CLEF_RUN_TASK:-runClient}"
 CLEF_RUN_DIR="${CLEF_RUN_DIR:-run}"
-SERVER_DIR="$ROOT/e2e/servers/$MC_VERSION"
+SERVER_DIR="${SERVER_DIR:-$ROOT/e2e/servers/$MC_VERSION}"
 mkdir -p "$ROOT/e2e"
 
 SRV_PID=""
@@ -42,10 +48,15 @@ cleanup() {
 trap cleanup EXIT
 
 # 1) server jar
-[[ -f "$SERVER_DIR/server.jar" ]] || MC_VERSION="$MC_VERSION" bash "$ROOT/scripts/fetch-server.sh" "$SERVER_DIR"
+[[ -f "$SERVER_DIR/server.jar" ]] || MC_VERSION="$MC_VERSION" SERVER_PORT="$MC_PORT" bash "$ROOT/scripts/fetch-server.sh" "$SERVER_DIR"
 
-# 2) boot server
-echo "[e2e] starting Minecraft $MC_VERSION server ($SERVER_JAVA); bot will speak protocol '$SERVER_VERSION'..."
+# 2) boot server on the requested port
+if [[ -f "$SERVER_DIR/server.properties" ]]; then
+  grep -v '^server-port=' "$SERVER_DIR/server.properties" > "$SERVER_DIR/server.properties.tmp" || true
+  echo "server-port=$MC_PORT" >> "$SERVER_DIR/server.properties.tmp"
+  mv "$SERVER_DIR/server.properties.tmp" "$SERVER_DIR/server.properties"
+fi
+echo "[e2e] starting Minecraft $MC_VERSION server ($SERVER_JAVA) on port $MC_PORT; bot will speak protocol '$SERVER_VERSION'..."
 ( cd "$SERVER_DIR" && "$SERVER_JAVA" -Xmx2G -jar server.jar nogui ) > "$SERVER_DIR/server.log" 2>&1 &
 SRV_PID=$!
 echo "[e2e] server pid=$SRV_PID, waiting for 'Done'..."
@@ -62,7 +73,7 @@ mkdir -p "$ROOT/$CLEF_RUN_DIR/config"
 cat > "$ROOT/$CLEF_RUN_DIR/config/mezzoclef.json" <<EOF
 {
   "auth": { "mode": "offline", "offlineUsername": "$BOT_NAME" },
-  "connection": { "autoConnect": true, "serverHost": "127.0.0.1", "serverPort": 25565, "serverVersion": "$SERVER_VERSION" },
+  "connection": { "autoConnect": true, "serverHost": "127.0.0.1", "serverPort": $MC_PORT, "serverVersion": "$SERVER_VERSION" },
   "control": { "enabled": true, "host": "127.0.0.1", "port": $WS_PORT, "authToken": "" },
   "screenshot": { "backend": "software", "defaultWidth": 640, "defaultHeight": 360, "maxRayDistance": 96 },
   "headless": true,

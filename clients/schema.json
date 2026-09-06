@@ -1,5 +1,5 @@
 {
-  "protocol": 1,
+  "protocol": 2,
   "server": "MezzoSopranoClef",
   "auth": {
     "requiredWhen": "control.authToken is set (welcome.requiresAuth = true)",
@@ -75,7 +75,7 @@
       "name": "status",
       "summary": "bot, world and player status",
       "args": [],
-      "result": "{headless,noGl,noWindow,inWorld,player?{...},server?,nav*,screenshotBackend,protocol{available,native,target},...}"
+      "result": "{headless,noGl,noWindow,screen,screenClass,inWorld,player?{...,armor,effects,gamemode,air,...},world?{time,weather,biome,light},server?,nav*,screenshotBackend,protocol{available,native,target},...}"
     },
     {
       "name": "auth.status",
@@ -138,6 +138,54 @@
       "result": "{sent}"
     },
     {
+      "name": "chatHistory",
+      "summary": "recent chat lines this bot has seen {limit?=50}",
+      "args": [
+        {
+          "name": "limit",
+          "type": "int",
+          "required": false,
+          "default": "50"
+        }
+      ],
+      "result": "{lines:[{time,kind:chat|system|whisper|team|actionbar,sender?,text}],stored} — an object, not a bare array; oldest line first"
+    },
+    {
+      "name": "whisper",
+      "summary": "private-message a player, using whichever command this server has {player, text}",
+      "args": [
+        {
+          "name": "player",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "text",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "result": "{sent,command,to}"
+    },
+    {
+      "name": "batch",
+      "summary": "run commands in order over one round-trip {commands:[{cmd,args}], continueOnError?=false}",
+      "args": [
+        {
+          "name": "commands",
+          "type": "object[]",
+          "required": true
+        },
+        {
+          "name": "continueOnError",
+          "type": "bool",
+          "required": false,
+          "default": "false"
+        }
+      ],
+      "result": "{results:[{cmd,ok,result?|code,error}],ran,requested}"
+    },
+    {
       "name": "look",
       "summary": "set view direction {yaw, pitch}",
       "args": [
@@ -153,6 +201,33 @@
         }
       ],
       "result": "{yaw,pitch}"
+    },
+    {
+      "name": "lookAt",
+      "summary": "point the head at a block or an entity {x,y,z} | {entityId}",
+      "args": [
+        {
+          "name": "x",
+          "type": "double",
+          "required": false
+        },
+        {
+          "name": "y",
+          "type": "double",
+          "required": false
+        },
+        {
+          "name": "z",
+          "type": "double",
+          "required": false
+        },
+        {
+          "name": "entityId",
+          "type": "int",
+          "required": false
+        }
+      ],
+      "result": "{yaw,pitch,distance}"
     },
     {
       "name": "players",
@@ -174,7 +249,7 @@
     },
     {
       "name": "screenshot",
-      "summary": "render a PNG at any {x,y,z,yaw,pitch,width,height,fov} -> base64 (defaults: player view)",
+      "summary": "render a PNG -> base64. {x,y,z,yaw,pitch,width,height,fov} for a free camera, {mode:'topdown',centerX,centerZ,radius} for an orthographic map, {annotate:true} to also get the camera and on-screen entity boxes",
       "args": [
         {
           "name": "x",
@@ -215,13 +290,59 @@
           "name": "fov",
           "type": "float",
           "required": false
+        },
+        {
+          "name": "mode",
+          "type": "string",
+          "required": false,
+          "default": "normal"
+        },
+        {
+          "name": "centerX",
+          "type": "double",
+          "required": false
+        },
+        {
+          "name": "centerZ",
+          "type": "double",
+          "required": false
+        },
+        {
+          "name": "radius",
+          "type": "int",
+          "required": false,
+          "default": "32"
+        },
+        {
+          "name": "annotate",
+          "type": "bool",
+          "required": false,
+          "default": "false"
         }
       ],
-      "result": "{format,backend,bytes,durationMs,snapshotMs,renderMs,pngMs,base64}"
+      "result": "{format,backend,mode,bytes,width,height,durationMs,snapshotMs,renderMs,pngMs,camera?,entities?:[{id,type,visible,box,depth}],base64}"
+    },
+    {
+      "name": "registry",
+      "summary": "ids the running version actually has {kinds?:[blocks,items,entities], tags?=false}",
+      "args": [
+        {
+          "name": "kinds",
+          "type": "string[]",
+          "required": false
+        },
+        {
+          "name": "tags",
+          "type": "bool",
+          "required": false,
+          "default": "false"
+        }
+      ],
+      "result": "{minecraftVersion,blocks?,items?,entities?,tags?}"
     },
     {
       "name": "goto",
-      "summary": "Baritone path to {x,y,z} or {x,z}",
+      "summary": "Baritone path to {x,y,z} or {x,z}, within {reach?=1} blocks — completion arrives as nav.done/nav.failed",
       "args": [
         {
           "name": "x",
@@ -237,21 +358,66 @@
           "name": "y",
           "type": "int",
           "required": false
+        },
+        {
+          "name": "reach",
+          "type": "int",
+          "required": false,
+          "default": "1"
         }
       ],
-      "result": "{pathing,backend}"
+      "result": "{pathing,reach,backend}"
+    },
+    {
+      "name": "nav.check",
+      "summary": "cheap walkability ESTIMATE — a walk-only A* over loaded chunks, not Baritone. Nothing moves. {x,y,z,reach?=1,maxNodes?}",
+      "args": [
+        {
+          "name": "x",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "y",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "z",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "reach",
+          "type": "int",
+          "required": false,
+          "default": "1"
+        },
+        {
+          "name": "maxNodes",
+          "type": "int",
+          "required": false
+        }
+      ],
+      "result": "{verdict:reachable|unreachable|unknown,reachable,cost?,nodes,maxNodes,exhausted,model} — an estimate; 'unknown' means the search ran out of budget, NOT that there is no route"
     },
     {
       "name": "baritone",
-      "summary": "run any Baritone command (full feature set, if Baritone is installed) {command}",
+      "summary": "run any Baritone command (full feature set, if Baritone is installed) {command, collectMs?=250} — returns the lines Baritone printed",
       "args": [
         {
           "name": "command",
           "type": "string",
           "required": true
+        },
+        {
+          "name": "collectMs",
+          "type": "int",
+          "required": false,
+          "default": "250"
         }
       ],
-      "result": "{ran,backend}"
+      "result": "{ran,backend,output:[lines Baritone printed]}"
     },
     {
       "name": "nav.stop",
@@ -263,7 +429,7 @@
       "name": "nav.status",
       "summary": "pathfinding availability + state",
       "args": [],
-      "result": "{available,backend,active}"
+      "result": "{available,backend,active,blockArguments?,goal?}"
     },
     {
       "name": "move",
@@ -320,7 +486,7 @@
     },
     {
       "name": "mine",
-      "summary": "start breaking a block over time {x,y,z,face?}",
+      "summary": "break a block over time {x,y,z,face?,wait?} — emits mineDone; wait blocks for it",
       "args": [
         {
           "name": "x",
@@ -342,9 +508,15 @@
           "type": "string",
           "required": false,
           "default": "up"
+        },
+        {
+          "name": "wait",
+          "type": "bool",
+          "required": false,
+          "default": "false"
         }
       ],
-      "result": "{mining}"
+      "result": "{mining} | {x,y,z,mining:false,broken,reason?,detail?,ticks}"
     },
     {
       "name": "stopMine",
@@ -376,7 +548,7 @@
     },
     {
       "name": "place",
-      "summary": "right-click/place against a block face {x,y,z,face?}",
+      "summary": "right-click/place against a block face {x,y,z,face?,item?,confirm?} — 'placed' is verified, not assumed",
       "args": [
         {
           "name": "x",
@@ -398,9 +570,20 @@
           "type": "string",
           "required": false,
           "default": "up"
+        },
+        {
+          "name": "item",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "confirm",
+          "type": "bool",
+          "required": false,
+          "default": "true"
         }
       ],
-      "result": "{placed}"
+      "result": "{placed,confirmed,result,ticks?,slot?,x?,y?,z?,block?}"
     },
     {
       "name": "use",
@@ -459,16 +642,21 @@
     },
     {
       "name": "entities",
-      "summary": "list nearby entities {radius?=16}",
+      "summary": "list nearby entities with combat/trade detail {radius?=16, kinds?:[type ids]}",
       "args": [
         {
           "name": "radius",
           "type": "double",
           "required": false,
           "default": "16"
+        },
+        {
+          "name": "kinds",
+          "type": "string[]",
+          "required": false
         }
       ],
-      "result": "[{id,type,name,x,y,z,distance}]"
+      "result": "[{id,type,name,x,y,z,distance,velocity,onFire,health?,maxHealth?,armor?,baby?,held?,lookingAtMe?,hostile,targetingMe,item?,villager?,owner?}]"
     },
     {
       "name": "blockAt",
@@ -491,6 +679,98 @@
         }
       ],
       "result": "{block,air}"
+    },
+    {
+      "name": "findBlocks",
+      "summary": "search loaded chunks for blocks or #tags {ids:[...], radius?=32, max?=32, sort?=nearest|none}",
+      "args": [
+        {
+          "name": "ids",
+          "type": "string[]",
+          "required": true
+        },
+        {
+          "name": "radius",
+          "type": "int",
+          "required": false,
+          "default": "32"
+        },
+        {
+          "name": "max",
+          "type": "int",
+          "required": false,
+          "default": "32"
+        },
+        {
+          "name": "sort",
+          "type": "string",
+          "required": false,
+          "default": "nearest"
+        }
+      ],
+      "result": "[{x,y,z,block,distance}]"
+    },
+    {
+      "name": "blocksIn",
+      "summary": "dense readout of a block cuboid {minX,minY,minZ,maxX,maxY,maxZ, palette?=true}",
+      "args": [
+        {
+          "name": "minX",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "minY",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "minZ",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "maxX",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "maxY",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "maxZ",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "palette",
+          "type": "bool",
+          "required": false,
+          "default": "true"
+        }
+      ],
+      "result": "{size,origin,order,palette?,encoding?,data?,blocks?}"
+    },
+    {
+      "name": "target",
+      "summary": "what is under the crosshair {maxDistance?=4.5, fluids?=false}",
+      "args": [
+        {
+          "name": "maxDistance",
+          "type": "double",
+          "required": false,
+          "default": "4.5"
+        },
+        {
+          "name": "fluids",
+          "type": "bool",
+          "required": false,
+          "default": "false"
+        }
+      ],
+      "result": "{kind:block|entity|none,x?,y?,z?,block?,face?,entityId?,type?,distance?}"
     },
     {
       "name": "interactEntity",
@@ -582,10 +862,52 @@
       "result": "{respawned}"
     },
     {
+      "name": "craft",
+      "summary": "craft an item using the open crafting screen, else the 2x2 player grid {item, count?=1, all?}",
+      "args": [
+        {
+          "name": "item",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "count",
+          "type": "int",
+          "required": false,
+          "default": "1"
+        },
+        {
+          "name": "all",
+          "type": "bool",
+          "required": false,
+          "default": "false"
+        }
+      ],
+      "result": "{crafted,item,reason?}"
+    },
+    {
+      "name": "recipes",
+      "summary": "known recipes that produce an item {item}",
+      "args": [
+        {
+          "name": "item",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "result": "[{result,count,recipeId,kind,ingredients:[{item?,items,tag?,count}],needsTable,width?,height?,station?}]"
+    },
+    {
+      "name": "craftable",
+      "summary": "everything the current inventory can make right now",
+      "args": [],
+      "result": "{grid,knownRecipes,items:[{item,count,fitsOpenGrid}]}"
+    },
+    {
       "name": "container",
       "summary": "read the open container: slots, cursor, and villager trades",
       "args": [],
-      "result": "{handler,syncId,screen,slots,cursor,trades?}"
+      "result": "{handler,syncId,screen,screenClass,slots,cursor,trades?}"
     },
     {
       "name": "clickSlot",
@@ -633,7 +955,7 @@
       "name": "screen",
       "summary": "list clickable widgets on the current screen (for modded button/field GUIs)",
       "args": [],
-      "result": "{screen,widgets:[{index,type,text,x,y,active,visible}]}"
+      "result": "{screen,screenClass,widgets:[{index,type,text,x,y,active,visible}]}"
     },
     {
       "name": "clickButton",
@@ -696,6 +1018,23 @@
       "result": "{equipped,fromSlot}"
     },
     {
+      "name": "moveToHotbar",
+      "summary": "put an item on the hotbar and select it, swapping it in if needed {item, slot?}",
+      "args": [
+        {
+          "name": "item",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "slot",
+          "type": "int",
+          "required": false
+        }
+      ],
+      "result": "{slot,moved,fromSlot}"
+    },
+    {
       "name": "deposit",
       "summary": "shift-click matching items from inventory INTO the open container {item}",
       "args": [
@@ -756,7 +1095,7 @@
     },
     {
       "name": "chat",
-      "description": "a chat or system message was received",
+      "description": "a chat, system, whisper, team or action-bar message arrived; 'raw' is the JSON component, 'kind' is chat|system|whisper|team|actionbar",
       "fields": [
         {
           "name": "text",
@@ -772,6 +1111,11 @@
           "name": "kind",
           "type": "string",
           "required": true
+        },
+        {
+          "name": "raw",
+          "type": "string",
+          "required": false
         }
       ]
     },
@@ -897,10 +1241,15 @@
     },
     {
       "name": "screenOpen",
-      "description": "a container/screen opened",
+      "description": "a container/screen opened. 'screen' is a stable readable name (title|connect|disconnected|death|downloading|message|inventory|crafting|furnace|anvil|enchanting|merchant|sign|book|container|other); 'screenClass' is the raw class, which is obfuscated outside a dev run",
       "fields": [
         {
           "name": "screen",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "screenClass",
           "type": "string",
           "required": true
         }
@@ -912,6 +1261,11 @@
       "fields": [
         {
           "name": "screen",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "screenClass",
           "type": "string",
           "required": true
         }
@@ -955,6 +1309,370 @@
         {
           "name": "id",
           "type": "int",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "entityHurt",
+      "description": "an entity within events.packetRadius took damage — including us; 'attacker' is the entity id that dealt it, which is what self-defence needs",
+      "fields": [
+        {
+          "name": "id",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "type",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "self",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "health",
+          "type": "float",
+          "required": true
+        },
+        {
+          "name": "source",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "attacker",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "attackerType",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "itemPickup",
+      "description": "the bot picked an item up",
+      "fields": [
+        {
+          "name": "item",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "count",
+          "type": "int",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "inventory",
+      "description": "inventory slots changed this tick; fetch values with the inventory command",
+      "fields": [
+        {
+          "name": "changed",
+          "type": "int[]",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "blockUpdate",
+      "description": "a block changed within events.blockUpdateRadius of the bot",
+      "fields": [
+        {
+          "name": "x",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "y",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "z",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "from",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "to",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "explosion",
+      "description": "an explosion went off within events.packetRadius. 1.21.8's packet carries no blast power, so 'knockback' (the impulse applied to us) is the only magnitude",
+      "fields": [
+        {
+          "name": "x",
+          "type": "double",
+          "required": true
+        },
+        {
+          "name": "y",
+          "type": "double",
+          "required": true
+        },
+        {
+          "name": "z",
+          "type": "double",
+          "required": true
+        },
+        {
+          "name": "distance",
+          "type": "double",
+          "required": true
+        },
+        {
+          "name": "knockback",
+          "type": "double[]",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "weather",
+      "description": "weather changed: clear | rain | thunder",
+      "fields": [
+        {
+          "name": "kind",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "time",
+      "description": "the day phase changed: dawn | day | dusk | night",
+      "fields": [
+        {
+          "name": "phase",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "time",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "day",
+          "type": "long",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "sleep",
+      "description": "the bot fell asleep (ok:true) or a bed was refused (ok:false, reason from the server's block.minecraft.bed.* message)",
+      "fields": [
+        {
+          "name": "ok",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "reason",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "key",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "x",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "y",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "z",
+          "type": "int",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "title",
+      "description": "the title, subtitle or action bar text changed",
+      "fields": [
+        {
+          "name": "title",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "subtitle",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "actionBar",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "mineDone",
+      "description": "a mine request finished; reason is cant_break | cancelled | replaced | not_in_world",
+      "fields": [
+        {
+          "name": "x",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "y",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "z",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "broken",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "reason",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "detail",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "ticks",
+          "type": "int",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "nav.done",
+      "description": "the bot reached its goto goal",
+      "fields": [
+        {
+          "name": "x",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "y",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "z",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "reach",
+          "type": "int",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "nav.failed",
+      "description": "the goal is over and was NOT reached. Always terminal — no nav.done can follow for the same goal. reason is a terminal Baritone PathEvent (CALC_FAILED, CANCELED) or CANCELLED | NO_PATH | REPLACED",
+      "fields": [
+        {
+          "name": "x",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "y",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "z",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "reach",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "reason",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "terminal",
+          "type": "bool",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "nav.progress",
+      "description": "Baritone is still working on the goal and something notable happened (NEXT_CALC_FAILED, SPLICING_ONTO_NEXT_EARLY, ...). Informational: the goal is still live, so do NOT treat this as a failure",
+      "fields": [
+        {
+          "name": "x",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "y",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "z",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "reach",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "event",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "baritone.log",
+      "description": "a line Baritone would have printed to the chat HUD — find results, eta, 'No known locations of ...', build progress, missing materials",
+      "fields": [
+        {
+          "name": "text",
+          "type": "string",
           "required": true
         }
       ]

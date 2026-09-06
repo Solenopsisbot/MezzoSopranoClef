@@ -65,6 +65,41 @@ const png = await bot.screenshot({ width: 1280, height: 720 }); // Uint8Array
 
 Run the source directly with `tsx`, `bun`, or `deno`, or compile with `tsc`.
 
+## Beyond the basics
+
+Both clients wrap the newer command groups too:
+
+```python
+logs = bot.find_blocks(["#minecraft:logs"], radius=32, max=8)   # nearest first
+bot.goto(logs[0]["x"], logs[0]["z"], logs[0]["y"], reach=2)     # then wait for nav.done
+bot.mine(logs[0]["x"], logs[0]["y"], logs[0]["z"], wait=True)   # blocks until broken or refused
+
+bot.craft("stick", count=4)
+png = bot.map(radius=64)                                        # top-down orthographic PNG
+
+region = bot.blocks_in((0, 63, 0), (15, 78, 15))
+from clef import decode_blocks_in
+blocks = decode_blocks_in(region)                               # flat list, x-major
+```
+
+```ts
+const logs = await bot.findBlocks(["#minecraft:logs"], { radius: 32, max: 8 });
+await bot.goto(logs[0].x, logs[0].z, logs[0].y, 2);
+bot.on("nav.done", () => console.log("arrived"));
+await bot.mine(logs[0].x, logs[0].y, logs[0].z, { wait: true });
+
+await bot.craft("stick", { count: 4 });
+const { png, entities } = await bot.screenshotAnnotated({ width: 640, height: 360 });
+
+const region = await bot.blocksIn([0, 63, 0], [15, 78, 15]);
+const blocks = decodeBlocksIn(region);                          // flat array, x-major
+```
+
+`blocksIn` returns a palette plus base64 LEB128 varint indices in **x-major** order —
+`i = ((x-minX)*sizeY + (y-minY))*sizeZ + (z-minZ)`. Both clients ship a reference decoder
+(`decode_blocks_in` / `decodeBlocksIn`); blocks in chunks the server hasn't sent read as
+`"unloaded"`, which is not the same as air.
+
 ## Anything not covered by a helper
 
 Both clients expose the generic call for the full command set in `schema.json`:
