@@ -144,6 +144,12 @@ def call(s, cmd, timeout=30, **args):
     raise RuntimeError(f"timeout waiting for response to '{cmd}'")
 
 
+def version_key(v):
+    """Sortable tuple for a release id, so '1.20.1' < '1.21.8' < '26.2'."""
+    import re as _re
+    return tuple(int(x) for x in _re.findall(r"\d+", v or "0")) or (0,)
+
+
 def wait_for_event(s, name, predicate, timeout=30):
     """Return the first buffered-or-incoming `name` event matching `predicate`, else raise."""
     for msg in EVENTS_SEEN:
@@ -217,11 +223,27 @@ def main():
     # us, so requiring the inbound event proves the receive path too — which on 1.19.2 and older
     # is a packet mixin rather than a Fabric API event, and is otherwise untested.
     marker = "MezzoSopranoClef e2e: PASS"
-    assert call(s, "subscribe", events=["chat"]) is not None
+    assert call(s, "subscribe", events=["chat", "blockUpdate"]) is not None
     call(s, "chat", message=marker)
     got = wait_for_event(s, "chat", lambda d: marker in (d.get("text") or ""), timeout=30)
     assert got.get("kind") == "chat", f"echoed message had kind={got.get('kind')!r}, want 'chat'"
     print(f"[probe] chat round-trip OK (sender={got.get('sender')!r})")
+
+    # Packet-derived events (blockUpdate/itemPickup/entityHurt/explosion) come from a mixin on
+    # ClientPacketListener. If that mixin is not listed in the module's mixin config it is simply
+    # absent — `defaultRequire` never trips — and `subscribe` still answers {subscribed:[...]}
+    # while nothing is ever delivered. So provoke one and require it, rather than trusting the
+    # subscribe ack. The mixin only exists from 1.20.1 up; older targets skip with a note.
+    native = (st.get("protocol") or {}).get("native") or ""
+    if version_key(native) >= version_key("1.20.1"):
+        pos = st["player"]
+        bx, by, bz = int(pos["x"]) + 2, int(pos["y"]) - 1, int(pos["z"])
+        call(s, "chat", message=f"/setblock {bx} {by} {bz} minecraft:stone")
+        wait_for_event(s, "blockUpdate", lambda d: True, timeout=30)
+        print(f"[probe] blockUpdate event OK (packet mixin is wired on {native})")
+    else:
+        print(f"[probe] blockUpdate check skipped: no packet mixin on {native} (needs 1.20.1+)")
+
     print("[probe] PASS")
     return 0
 

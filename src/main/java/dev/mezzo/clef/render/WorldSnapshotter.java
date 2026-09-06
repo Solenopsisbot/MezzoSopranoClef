@@ -94,13 +94,15 @@ public final class WorldSnapshotter {
         return 0xFFB0B0B0;                                 // everything else: gray
     }
 
-    /** Real biome/time-of-day sky tint, falling back to a pleasant default. */
+    /**
+     * Sky tint for the screenshot background.
+     *
+     * <p>This release exposes no sky colour on the client level — there is no {@code getSkyColor} to
+     * ask — so this is a fixed daylight blue, not a real biome/time-of-day tint. Every other target
+     * reads the real value; see the sibling implementations.
+     */
     public static int skyColor(ClientLevel world, Vec3 cameraPos) {
-        try {
-            return 0xFF87CEEB;
-        } catch (Throwable t) {
-            return 0xFF87CEEB;
-        }
+        return 0xFF87CEEB;
     }
 
     private WorldSnapshotter() {}

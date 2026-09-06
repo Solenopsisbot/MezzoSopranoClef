@@ -93,10 +93,17 @@ public final class WorldSnapshotter {
     /** Real biome/time-of-day sky tint, falling back to a pleasant default. */
     public static int skyColor(MultiPlayerLevel world, Vec3 cameraPos) {
         try {
-            return 0xFF87CEEB;
+            // Returns normalised RGB components here rather than a packed int, keyed by BlockPos.
+            Vec3 tint = world.getSkyColor(new BlockPos(cameraPos), 1.0f);
+            return 0xFF000000 | (channel(tint.x) << 16) | (channel(tint.y) << 8) | channel(tint.z);
         } catch (Throwable t) {
             return 0xFF87CEEB;
         }
+    }
+
+    /** Clamps a 0..1 colour component to a 0..255 channel. */
+    private static int channel(double v) {
+        return Math.max(0, Math.min(255, (int) Math.round(v * 255.0)));
     }
 
     private WorldSnapshotter() {}

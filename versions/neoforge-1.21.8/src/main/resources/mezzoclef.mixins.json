@@ -13,7 +13,8 @@
     "client.BossBarHudAccessor",
     "client.RenderSystemNoGlMixin",
     "client.SoundDisableMixin",
-    "client.NeoForgeLoadingOverlayMixin"
+    "client.NeoForgeLoadingOverlayMixin",
+    "client.ClientPlayNetworkHandlerEventsMixin"
   ],
   "injectors": {
     "defaultRequire": 1

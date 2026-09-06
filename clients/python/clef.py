@@ -245,8 +245,13 @@ class ClefClient:
             args["version"] = version
         return self.call("connect", **args)
 
-    def protocol(self) -> Dict[str, Any]:
-        """ViaFabricPlus state: native version, current target, and every joinable server release."""
+    def protocol_info(self) -> Dict[str, Any]:
+        """ViaFabricPlus state: native version, current target, and every joinable server release.
+
+        Named ``protocol_info`` rather than ``protocol`` because ``self.protocol`` already holds the
+        control-plane protocol version from the welcome frame; a method of the same name would be
+        shadowed by that attribute and raise ``TypeError: 'int' object is not callable``.
+        """
         return self.call("protocol")
 
     def disconnect(self) -> Dict[str, Any]:

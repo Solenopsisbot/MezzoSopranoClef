@@ -257,8 +257,14 @@ export class ClefClient {
   schema() { return this.call("schema"); }
   /** Join a server. `version`: "auto" (ping + match, the server default), "native", or a release like "1.12.2". */
   connectServer(host: string, port = 25565, version?: string) { return this.call("connect", prune({ host, port, version })); }
-  /** ViaFabricPlus state: native version, current target, and every joinable server release. */
-  protocol() { return this.call("protocol"); }
+  /**
+   * ViaFabricPlus state: native version, current target, and every joinable server release.
+   *
+   * Named `protocolInfo` rather than `protocol` because the `protocol` field already holds the
+   * control-plane protocol version from the welcome frame; declaring both is a duplicate
+   * identifier, and at runtime the field shadows the method.
+   */
+  protocolInfo() { return this.call("protocol"); }
   disconnect() { return this.call("disconnect"); }
   chat(message: string) { return this.call("chat", { message }); }
   look(yaw?: number, pitch?: number) { return this.call("look", prune({ yaw, pitch })); }

@@ -49,4 +49,20 @@ sync-chunk-writes=false
 motd=MezzoSopranoClef E2E $MC_VERSION
 EOP
 
-echo "[server] ready in $DIR (Minecraft $MC_VERSION, online-mode=false, port $PORT)"
+# Op the bot so the e2e probe can drive a server command (/setblock) and assert that the
+# packet-derived event stream actually delivers — subscribing succeeds even when a mixin was never
+# registered, so the events have to be provoked to be proven. Offline UUIDs are deterministic:
+# Java's UUID.nameUUIDFromBytes("OfflinePlayer:<name>"), i.e. MD5 with the v3/IETF bits set.
+BOT_NAME="${BOT_NAME:-ClefBot}"
+python3 - "$DIR" "$BOT_NAME" <<'PY'
+import hashlib, json, pathlib, sys, uuid
+out, name = pathlib.Path(sys.argv[1]), sys.argv[2]
+b = bytearray(hashlib.md5(("OfflinePlayer:" + name).encode("utf-8")).digest())
+b[6] = (b[6] & 0x0f) | 0x30
+b[8] = (b[8] & 0x3f) | 0x80
+(out / "ops.json").write_text(json.dumps(
+    [{"uuid": str(uuid.UUID(bytes=bytes(b))), "name": name, "level": 4,
+      "bypassesPlayerLimit": False}], indent=2) + "\n")
+PY
+
+echo "[server] ready in $DIR (Minecraft $MC_VERSION, online-mode=false, port $PORT, $BOT_NAME opped)"
