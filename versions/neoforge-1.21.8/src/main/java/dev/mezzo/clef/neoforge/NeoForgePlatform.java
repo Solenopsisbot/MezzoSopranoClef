@@ -34,6 +34,6 @@ public final class NeoForgePlatform implements ModPlatform {
     public String minecraftVersion() {
         // NeoForge has no loader-side registry of the game version the way Fabric Loader does, so
         // ask Minecraft itself. Safe here: this is only read lazily, well after the game classes load.
-        return SharedConstants.getCurrentVersion().getName();
+        return SharedConstants.getCurrentVersion().name();
     }
 }

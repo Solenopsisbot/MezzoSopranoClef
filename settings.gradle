@@ -2,9 +2,12 @@ pluginManagement {
     plugins {
         id 'net.fabricmc.fabric-loom' version '1.17.20'
         id 'fabric-loom' version '1.17.20'
+        id 'net.neoforged.moddev' version '2.0.146'
     }
     repositories {
         maven { name = 'Fabric'; url = 'https://maven.fabricmc.net/' }
+        // ModDevGradle (the NeoForge build plugin) and NeoForge itself live here.
+        maven { name = 'NeoForged'; url = 'https://maven.neoforged.net/releases' }
         gradlePluginPortal()
         mavenCentral()
     }
@@ -43,3 +46,10 @@ include 'versions:fabric-1.17.1'
 include 'versions:fabric-1.16.5'
 include 'versions:fabric-1.15.2'
 include 'versions:fabric-1.14.4'
+
+// ---------------------------------------------------------------------------
+// NeoForge. A different loader rather than another version: the shared code is the same, but the
+// entrypoint, event wiring and build plugin are its own. `versions/mc-1.21.8/` holds the Minecraft
+// glue that this and the Fabric 1.21.8 target both compile.
+// ---------------------------------------------------------------------------
+include 'versions:neoforge-1.21.8'

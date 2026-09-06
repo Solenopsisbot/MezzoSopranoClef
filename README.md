@@ -94,6 +94,7 @@ a genuine port: same shared `common/` source, plus that release's Minecraft-faci
 ./gradlew :versions:fabric-1.20.1:build       # a real 1.20.1 Fabric mod jar
 ./gradlew :versions:fabric-1.20.1:runClient   # boot the 1.20.1 client headless
 scripts/verify_native.sh 1.20.1               # boot it against a real 1.20.1 server
+scripts/verify_native.sh neoforge-1.21.8      # non-Fabric targets are named <loader>-<mc>
 ```
 
 `nativeClients[]` in the matrix file records these, with `runtime-verified` (booted and joined a
@@ -104,13 +105,21 @@ Drop that version's mods into the module's `run/mods/` alongside the bot.
 1.20.4, 1.20.1, 1.19.4, 1.19.2, 1.18.2, 1.17.1, 1.16.5, 1.15.2 and 1.14.4 — every Fabric release
 back to the oldest one Mojang publishes mappings for.
 
+**NeoForge 1.21.8** is the first non-Fabric target, and it emits a byte-identical control-plane
+event stream to its Fabric twin. The two share everything except the loader layer: `common/` is
+loader-neutral behind `ModPlatform`, `versions/mc-1.21.8/` holds that release's Minecraft glue
+(including `ClefBotCore`, the whole bot), and each loader module contributes only a platform
+implementation and a small class wiring its own events onto the core.
+
 **What does not exist yet**, and is not pretended to (`nativeClientsNotStarted` in the matrix
-file spells out why): **any Forge or NeoForge target**, 1.12.2, and Fabric 1.13.2 and older. Forge
-and NeoForge are different loaders rather than older versions — different entrypoints, events and
-build plugin — so each is a port of the loader-facing layer, not a version bump. If you need one,
-that is the next piece of work, not a flag to flip. 1.14.4 is the floor for a different reason:
-it is the first release with official Mojang mappings, and those are what let `common/` be shared
-verbatim across the matrix.
+file spells out why): **any Forge target**, NeoForge on releases other than 1.21.8, 1.12.2, and
+Fabric 1.13.2 and older. Forge is a different loader again, though it would now reuse the seam
+NeoForge proved out. 1.14.4 is the floor for a different reason: it is the first release with
+official Mojang mappings, and those are what let `common/` be shared verbatim across the matrix.
+
+**GPU-free booting is Fabric-only.** NeoForge patches Blaze3D with its own extension interfaces, so
+the stub GPU device written against vanilla's cannot satisfy them; the NeoForge target runs headless
+behind a hidden window, like the 1.21.4-and-older Fabric targets.
 
 **Chat events differ slightly on old releases**, because the packets do. Fabric API only gained
 client message events in 1.19.3, so 1.19.2 and older read the chat packets directly

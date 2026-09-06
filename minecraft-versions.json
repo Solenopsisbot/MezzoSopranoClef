@@ -504,12 +504,22 @@
       "noGl": false,
       "status": "runtime-verified",
       "verifiedOn": "2026-09-06"
+    },
+    {
+      "minecraft": "1.21.8",
+      "loader": "neoforge",
+      "java": 21,
+      "module": "versions/neoforge-1.21.8",
+      "noGl": false,
+      "status": "runtime-verified",
+      "verifiedOn": "2026-09-06"
     }
   ],
   "nativeClientsNotStarted": {
-    "forge": "No Forge target exists. Forge is a different loader (no Fabric Loader API, different entrypoints/events/build plugin), so it is a separate port of the loader-facing layer, not a version bump.",
-    "neoforge": "No NeoForge target exists, for the same reason as Forge.",
+    "forge": "No Forge target exists. Forge is a different loader again (its own entrypoints, event bus and build plugin). The loader seam that NeoForge proved out \u2014 ModPlatform plus a thin client wiring class over the shared ClefBotCore \u2014 is what a Forge port would reuse.",
     "1.12.2": "Forge-only, Java 8, and predates Mojang's published mappings (needs MCP/Parchment). The single largest port in the matrix; not attempted.",
-    "fabric<=1.13.2": "1.14.4 is the floor: Mojang first published official mappings for it, and the whole matrix is built against Mojang mappings so common/ can be shared verbatim. Older releases would need a different mapping set (MCP/Parchment) and a separate toolchain."
+    "fabric<=1.13.2": "1.14.4 is the floor: Mojang first published official mappings for it, and the whole matrix is built against Mojang mappings so common/ can be shared verbatim. Older releases would need a different mapping set (MCP/Parchment) and a separate toolchain.",
+    "neoforge (other versions)": "Only 1.21.8 has a NeoForge target. Adding another NeoForge release is now a version bump like any other: reuse ClefBotCore and NeoForgePlatform, and port only that release's Minecraft glue.",
+    "neoforge no-gl": "GPU-free (no-gl) booting is not implemented on NeoForge. NeoForge patches Blaze3D with its own extension interfaces (GpuDeviceExtension, plus extra RenderPass/CommandEncoder methods), so the vanilla-shaped stub device is not shareable. The NeoForge target runs headless behind a hidden window instead, exactly like the 1.21.4-and-older Fabric targets."
   }
 }

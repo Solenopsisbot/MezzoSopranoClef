@@ -55,6 +55,7 @@ sourceSets {
         // Fabric 1.21.8 target. Only src/main/java here is NeoForge-specific.
         java.srcDirs = ['../../common/src/main/java', '../mc-1.21.8/src/main/java', 'src/main/java']
         resources.srcDirs = ['../../common/src/main/resources', 'src/main/resources']
+
     }
 }
 

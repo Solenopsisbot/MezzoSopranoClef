@@ -22,9 +22,11 @@ def main():
     report = json.load(open(report_path))
     matrix = json.load(open(matrix_path))
     today = datetime.date.today().isoformat()
-    by_version = {r["minecraft"]: r for r in report["results"]}
+    # Keyed by (minecraft, loader): 1.21.8 has both a Fabric and a NeoForge target, and they are
+    # separate pieces of evidence. Reports predating the loader field are treated as Fabric.
+    by_target = {(r["minecraft"], r.get("loader", "fabric")): r for r in report["results"]}
     for entry in matrix["nativeClients"]:
-        r = by_version.get(entry["minecraft"])
+        r = by_target.get((entry["minecraft"], entry.get("loader", "fabric")))
         if not r:
             continue
         entry.pop("error", None)
