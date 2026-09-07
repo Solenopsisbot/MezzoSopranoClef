@@ -12,15 +12,19 @@ mkdir -p "$DIR"
 
 if [[ ! -f "$DIR/server.jar" ]]; then
   echo "[server] resolving $MC_VERSION ..."
-  VURL=$(curl -fsSL https://piston-meta.mojang.com/mc/game/version_manifest_v2.json \
+  VURL=$(curl -fsSL --connect-timeout 30 --max-time 120 --retry 3 https://piston-meta.mojang.com/mc/game/version_manifest_v2.json \
     | python3 -c "import sys,json;d=json.load(sys.stdin);print(next(v['url'] for v in d['versions'] if v['id']=='$MC_VERSION'))")
-  SURL=$(curl -fsSL "$VURL" \
+  SURL=$(curl -fsSL --connect-timeout 30 --max-time 120 --retry 3 "$VURL" \
     | python3 -c "import sys,json;print(json.load(sys.stdin)['downloads']['server']['url'])")
   echo "[server] downloading $SURL"
   # Retry, then check what actually landed. A transient curl failure (HTTP/2 PROTOCOL_ERROR shows
   # up often enough) used to leave no jar while the script still said "ready", so the run failed
   # later with a baffling "Unable to access jarfile server.jar" instead of naming the download.
-  if ! curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$SURL" -o "$DIR/server.jar.part"; then
+  # --speed-limit/--speed-time is the important pair: a stalled transfer produces no error and
+  # no bytes, so without it curl waits forever and one target hangs the whole matrix run.
+  if ! curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors \
+          --connect-timeout 30 --max-time 900 --speed-limit 1024 --speed-time 60 \
+          "$SURL" -o "$DIR/server.jar.part"; then
     rm -f "$DIR/server.jar.part"
     echo "[server] FAILED to download the $MC_VERSION server jar from $SURL" >&2
     exit 1

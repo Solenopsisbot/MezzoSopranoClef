@@ -71,7 +71,9 @@ for v in "${VERSIONS[@]}"; do
     sleep 1
   done
   rm -f "$ROOT/e2e/bot.log"
-  if MC_VERSION="$mc" CLEF_RUN_TASK="$task" CLEF_RUN_DIR="$rundir" \
+  # Cap each target. Without this one hung step — a stalled download, a wedged client — blocks the
+  # whole matrix indefinitely rather than failing that target and moving on.
+  if timeout "${CLEF_TARGET_TIMEOUT:-900}" env MC_VERSION="$mc" CLEF_RUN_TASK="$task" CLEF_RUN_DIR="$rundir" \
      CLEF_WORLD_TIMEOUT="${CLEF_WORLD_TIMEOUT:-240}" CLEF_CONNECT_TIMEOUT=300 \
      bash "$ROOT/scripts/e2e.sh" > "$ROOT/e2e/native-$v.out" 2>&1; then
     echo "[native] $v PASS"; pass=$((pass+1)); ok=true
