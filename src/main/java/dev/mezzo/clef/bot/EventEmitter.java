@@ -11,23 +11,22 @@ import dev.mezzo.clef.api.ScreenNames;
 import dev.mezzo.clef.config.ClefConfig;
 import dev.mezzo.clef.mixin.client.InGameHudAccessor;
 import dev.mezzo.clef.nav.Navigator;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.screen.ingame.HandledScreen;
-import net.minecraft.client.network.PlayerListEntry;
-import net.minecraft.entity.Entity;
-import net.minecraft.entity.EntityType;
-import net.minecraft.item.ItemStack;
-import net.minecraft.network.message.MessageType;
-import net.minecraft.registry.Registries;
-import net.minecraft.registry.RegistryOps;
-import net.minecraft.text.Text;
-import net.minecraft.text.TextCodecs;
-import net.minecraft.text.TranslatableTextContent;
-
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
+import net.minecraft.client.multiplayer.PlayerInfo;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.network.chat.ChatType;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.ComponentSerialization;
+import net.minecraft.network.chat.contents.TranslatableContents;
+import net.minecraft.resources.RegistryOps;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.item.ItemStack;
 
 /**
  * Owns the pushed event stream: everything the bot notices without being asked.
@@ -111,7 +110,7 @@ public final class EventEmitter {
      * {@code chat|system|whisper|team|actionbar}; {@code raw} is the message's JSON component, so a
      * client can read colours, click events and translation keys instead of a flattened string.
      */
-    public void onMessage(String kind, String sender, Text message) {
+    public void onMessage(String kind, String sender, Component message) {
         String text = message == null ? "" : message.getString();
         services.chatLog.add(kind, sender, text);
         if (!control.hasSubscribers("chat")) return;
@@ -125,15 +124,15 @@ public final class EventEmitter {
     }
 
     /** Classifies a signed player message from the message type the server tagged it with. */
-    public static String kindOf(MessageType.Parameters params) {
+    public static String kindOf(ChatType.Bound params) {
         if (params == null) return "chat";
-        var key = params.type().getKey().orElse(null);
+        var key = params.chatType().unwrapKey().orElse(null);
         if (key == null) return "chat";
-        if (key.equals(MessageType.MSG_COMMAND_INCOMING) || key.equals(MessageType.MSG_COMMAND_OUTGOING)) {
+        if (key.equals(ChatType.MSG_COMMAND_INCOMING) || key.equals(ChatType.MSG_COMMAND_OUTGOING)) {
             return "whisper";
         }
-        if (key.equals(MessageType.TEAM_MSG_COMMAND_INCOMING)
-                || key.equals(MessageType.TEAM_MSG_COMMAND_OUTGOING)) {
+        if (key.equals(ChatType.TEAM_MSG_COMMAND_INCOMING)
+                || key.equals(ChatType.TEAM_MSG_COMMAND_OUTGOING)) {
             return "team";
         }
         return "chat";
@@ -144,7 +143,7 @@ public final class EventEmitter {
      * servers that use {@code /tellraw}-style output, so we look at the translation key — those are
      * stable identifiers, unlike the rendered text, which is localised.
      */
-    public static String kindOfSystem(Text message, boolean overlay) {
+    public static String kindOfSystem(Component message, boolean overlay) {
         if (overlay) return "actionbar";
         String key = translationKey(message);
         if (key == null) return "system";
@@ -159,9 +158,9 @@ public final class EventEmitter {
 
     // ---- per-tick polling -------------------------------------------------------------
 
-    public void tick(MinecraftClient mc) {
+    public void tick(Minecraft mc) {
         emitScreenChange(mc);
-        if (mc.player == null || mc.world == null) return;
+        if (mc.player == null || mc.level == null) return;
         eventTickCounter++;
 
         emitVitals(mc);
@@ -178,14 +177,14 @@ public final class EventEmitter {
     }
 
     /** screen open/close — handy for UI automation (react to a chest/furnace/trade opening). */
-    private void emitScreenChange(MinecraftClient mc) {
-        String screen = ScreenNames.of(mc.currentScreen);
-        String raw = ScreenNames.rawOf(mc.currentScreen);
+    private void emitScreenChange(Minecraft mc) {
+        String screen = ScreenNames.of(mc.gui.screen());
+        String raw = ScreenNames.rawOf(mc.gui.screen());
         if (raw.equals(lastScreen)) return;   // diff on the raw name: two chests are the same "container"
         JsonObject data = new JsonObject();
         data.addProperty("screen", screen);
         data.addProperty("screenClass", raw);
-        if (!ScreenNames.NONE.equals(screen) && mc.currentScreen instanceof HandledScreen) {
+        if (!ScreenNames.NONE.equals(screen) && mc.gui.screen() instanceof AbstractContainerScreen) {
             control.emitEvent("screenOpen", data);
         } else if (ScreenNames.NONE.equals(screen)) {
             control.emitEvent("screenClose", data);
@@ -194,9 +193,9 @@ public final class EventEmitter {
     }
 
     /** health / damage / death / respawn. Unconditional: auto-respawn depends on the death edge. */
-    private void emitVitals(MinecraftClient mc) {
+    private void emitVitals(Minecraft mc) {
         float hp = mc.player.getHealth();
-        int food = mc.player.getHungerManager().getFoodLevel();
+        int food = mc.player.getFoodData().getFoodLevel();
         float prevHp = lastHealth;
         if (hp != lastHealth || food != lastFood) {
             JsonObject data = new JsonObject();
@@ -219,7 +218,7 @@ public final class EventEmitter {
             control.emitEvent("death", new JsonObject());
             if (config.connection.autoRespawn) {
                 try {
-                    mc.player.requestRespawn();
+                    mc.player.respawn();
                 } catch (Throwable t) {
                     MezzoClef.LOG.warn("Auto-respawn failed: {}", t.toString());
                 }
@@ -230,25 +229,25 @@ public final class EventEmitter {
         }
     }
 
-    private void emitTickSnapshot(MinecraftClient mc) {
+    private void emitTickSnapshot(Minecraft mc) {
         if (eventTickCounter % TICK_EVENT_INTERVAL != 0 || !control.hasSubscribers("tick")) return;
         JsonObject data = new JsonObject();
         data.addProperty("x", mc.player.getX());
         data.addProperty("y", mc.player.getY());
         data.addProperty("z", mc.player.getZ());
-        data.addProperty("yaw", mc.player.getYaw());
-        data.addProperty("pitch", mc.player.getPitch());
+        data.addProperty("yaw", mc.player.getYRot());
+        data.addProperty("pitch", mc.player.getXRot());
         data.addProperty("health", mc.player.getHealth());
-        data.addProperty("food", mc.player.getHungerManager().getFoodLevel());
-        data.addProperty("dimension", mc.world.getRegistryKey().getValue().toString());
+        data.addProperty("food", mc.player.getFoodData().getFoodLevel());
+        data.addProperty("dimension", mc.level.dimension().identifier().toString());
         control.emitEvent("tick", data);
     }
 
-    private void emitPlayerListDiff(MinecraftClient mc) {
-        if (eventTickCounter % 10 != 0 || mc.getNetworkHandler() == null) return;
+    private void emitPlayerListDiff(Minecraft mc) {
+        if (eventTickCounter % 10 != 0 || mc.getConnection() == null) return;
         Set<String> current = new HashSet<>();
-        for (PlayerListEntry e : mc.getNetworkHandler().getPlayerList()) {
-            current.add(e.getProfile().getName());
+        for (PlayerInfo e : mc.getConnection().getOnlinePlayers()) {
+            current.add(e.getProfile().name());
         }
         if (lastPlayers != null) {
             for (String name : current) {
@@ -267,14 +266,14 @@ public final class EventEmitter {
         control.emitEvent(event, data);
     }
 
-    private void emitEntityDiff(MinecraftClient mc) {
+    private void emitEntityDiff(Minecraft mc) {
         if (eventTickCounter % ENTITY_EVENT_INTERVAL != 0) return;
         if (!control.hasSubscribers("entitySpawn") && !control.hasSubscribers("entityRemove")) return;
         Set<Integer> current = new HashSet<>();
         Map<Integer, Entity> byId = new HashMap<>();
         double r2 = ENTITY_EVENT_RADIUS * ENTITY_EVENT_RADIUS;
-        for (Entity e : mc.world.getEntities()) {
-            if (e == mc.player || e.squaredDistanceTo(mc.player) > r2) continue;
+        for (Entity e : mc.level.entitiesForRendering()) {
+            if (e == mc.player || e.distanceToSqr(mc.player) > r2) continue;
             current.add(e.getId());
             byId.put(e.getId(), e);
         }
@@ -284,7 +283,7 @@ public final class EventEmitter {
                 Entity e = byId.get(id);
                 JsonObject data = new JsonObject();
                 data.addProperty("id", id);
-                data.addProperty("type", EntityType.getId(e.getType()).toString());
+                data.addProperty("type", EntityType.getKey(e.getType()).toString());
                 data.addProperty("x", e.getX());
                 data.addProperty("y", e.getY());
                 data.addProperty("z", e.getZ());
@@ -300,8 +299,8 @@ public final class EventEmitter {
         lastEntities = current;
     }
 
-    private void emitWeather(MinecraftClient mc) {
-        String kind = mc.world.isThundering() ? "thunder" : mc.world.isRaining() ? "rain" : "clear";
+    private void emitWeather(Minecraft mc) {
+        String kind = mc.level.isThundering() ? "thunder" : mc.level.isRaining() ? "rain" : "clear";
         if (kind.equals(lastWeather)) return;
         boolean first = lastWeather == null;
         lastWeather = kind;
@@ -311,16 +310,16 @@ public final class EventEmitter {
         control.emitEvent("weather", data);
     }
 
-    private void emitTimePhase(MinecraftClient mc) {
-        String phase = phaseOf(mc.world.getTimeOfDay());
+    private void emitTimePhase(Minecraft mc) {
+        String phase = phaseOf(mc.level.getDefaultClockTime());
         if (phase.equals(lastTimePhase)) return;
         boolean first = lastTimePhase == null;
         lastTimePhase = phase;
         if (first || !control.hasSubscribers("time")) return;
         JsonObject data = new JsonObject();
         data.addProperty("phase", phase);
-        data.addProperty("time", mc.world.getTimeOfDay() % 24000L);
-        data.addProperty("day", mc.world.getTimeOfDay() / 24000L);
+        data.addProperty("time", mc.level.getDefaultClockTime() % 24000L);
+        data.addProperty("day", mc.level.getDefaultClockTime() / 24000L);
         control.emitEvent("time", data);
     }
 
@@ -334,11 +333,11 @@ public final class EventEmitter {
         return "dawn";
     }
 
-    private void emitTitles(MinecraftClient mc) {
+    private void emitTitles(Minecraft mc) {
         if (!control.hasSubscribers("title")) return;
         String title, subtitle, actionBar;
         try {
-            InGameHudAccessor hud = (InGameHudAccessor) (Object) mc.inGameHud;
+            InGameHudAccessor hud = (InGameHudAccessor) (Object) mc.gui;
             title = flat(hud.clef$getTitle());
             subtitle = flat(hud.clef$getSubtitle());
             actionBar = flat(hud.clef$getOverlayMessage());
@@ -365,17 +364,17 @@ public final class EventEmitter {
      * wants the values follows up with {@code inventory}; sending them here would mean pushing the
      * whole inventory several times a second.
      */
-    private void emitInventoryDiff(MinecraftClient mc) {
+    private void emitInventoryDiff(Minecraft mc) {
         if (eventTickCounter % INVENTORY_EVENT_INTERVAL != 0) return;
         if (!control.hasSubscribers("inventory")) {
             lastInventory = null;   // resync from scratch next time somebody subscribes
             return;
         }
         var inv = mc.player.getInventory();
-        String[] current = new String[inv.size()];
+        String[] current = new String[inv.getContainerSize()];
         for (int i = 0; i < current.length; i++) {
-            ItemStack stack = inv.getStack(i);
-            current[i] = stack.isEmpty() ? "" : Registries.ITEM.getId(stack.getItem()) + "x" + stack.getCount();
+            ItemStack stack = inv.getItem(i);
+            current[i] = stack.isEmpty() ? "" : BuiltInRegistries.ITEM.getKey(stack.getItem()) + "x" + stack.getCount();
         }
         if (lastInventory != null && lastInventory.length == current.length) {
             JsonArray changed = new JsonArray();
@@ -391,14 +390,14 @@ public final class EventEmitter {
         lastInventory = current;
     }
 
-    private void emitSleep(MinecraftClient mc) {
+    private void emitSleep(Minecraft mc) {
         boolean sleeping = mc.player.isSleeping();
         if (sleeping == wasSleeping) return;
         wasSleeping = sleeping;
         if (!sleeping || !control.hasSubscribers("sleep")) return;
         JsonObject data = new JsonObject();
         data.addProperty("ok", true);
-        mc.player.getSleepingPosition().ifPresent(pos -> {
+        mc.player.getSleepingPos().ifPresent(pos -> {
             data.addProperty("x", pos.getX());
             data.addProperty("y", pos.getY());
             data.addProperty("z", pos.getZ());
@@ -410,7 +409,7 @@ public final class EventEmitter {
      * The server reports a refused bed as a translated system message, so that's where a sleep
      * failure has to be read from. The keys are stable identifiers; the rendered text isn't.
      */
-    public void onSystemMessageForSleep(Text message) {
+    public void onSystemMessageForSleep(Component message) {
         if (!control.hasSubscribers("sleep")) return;
         String key = translationKey(message);
         if (key == null || !key.startsWith("block.minecraft.bed.")) return;
@@ -479,27 +478,27 @@ public final class EventEmitter {
 
     // ---- helpers ----------------------------------------------------------------------
 
-    private static String flat(Text text) {
+    private static String flat(Component text) {
         return text == null ? "" : text.getString();
     }
 
-    private static String translationKey(Text message) {
-        return message != null && message.getContent() instanceof TranslatableTextContent t ? t.getKey() : null;
+    private static String translationKey(Component message) {
+        return message != null && message.getContents() instanceof TranslatableContents t ? t.getKey() : null;
     }
 
     /**
-     * Serializes a {@link Text} to its JSON component form. Needs the world's dynamic registries
+     * Serializes a {@link Component} to its JSON component form. Needs the world's dynamic registries
      * (a component can reference an item or an entity type), so it degrades to null off-world
      * rather than guessing.
      */
-    private static JsonElement rawText(Text message) {
+    private static JsonElement rawText(Component message) {
         if (message == null) return null;
         try {
-            MinecraftClient mc = MinecraftClient.getInstance();
-            var ops = mc.world != null
-                    ? RegistryOps.of(JsonOps.INSTANCE, mc.world.getRegistryManager())
+            Minecraft mc = Minecraft.getInstance();
+            var ops = mc.level != null
+                    ? RegistryOps.create(JsonOps.INSTANCE, mc.level.registryAccess())
                     : JsonOps.INSTANCE;
-            return TextCodecs.CODEC.encodeStart(ops, message).result().orElse(null);
+            return ComponentSerialization.CODEC.encodeStart(ops, message).result().orElse(null);
         } catch (Throwable t) {
             return null;
         }

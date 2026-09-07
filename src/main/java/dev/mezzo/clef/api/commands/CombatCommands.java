@@ -4,7 +4,7 @@ import com.google.gson.JsonObject;
 import dev.mezzo.clef.api.ApiException;
 import dev.mezzo.clef.api.CommandDispatcher;
 import dev.mezzo.clef.bot.CombatController;
-import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.Minecraft;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -50,7 +50,7 @@ public final class CombatCommands {
                     CombatController.ShootRequest request =
                             new CombatController.ShootRequest(entityId, lead, charge, shots, maxRange);
                     CompletableFuture<CombatController.Result> done = ctx.onMain(() ->
-                            ctx.server.services.combat.startShoot(MinecraftClient.getInstance(), request));
+                            ctx.server.services.combat.startShoot(Minecraft.getInstance(), request));
                     if (!wait) return started("shootAt", entityId);
                     return done.get(waitMs(CombatController.shootBudgetTicks(shots, charge)),
                             TimeUnit.MILLISECONDS).toJson();
@@ -74,7 +74,7 @@ public final class CombatCommands {
                     CombatController.MeleeRequest request =
                             new CombatController.MeleeRequest(entityId, maxMs, reach, stopBelowHealth);
                     CompletableFuture<CombatController.Result> done = ctx.onMain(() ->
-                            ctx.server.services.combat.startMelee(MinecraftClient.getInstance(), request));
+                            ctx.server.services.combat.startMelee(Minecraft.getInstance(), request));
                     if (!wait) return started("meleeWhile", entityId);
                     return done.get(waitMs(CombatController.meleeBudgetTicks(maxMs)),
                             TimeUnit.MILLISECONDS).toJson();

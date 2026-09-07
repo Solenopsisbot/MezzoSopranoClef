@@ -1,21 +1,21 @@
 package dev.mezzo.clef.api;
 
-import net.minecraft.client.gui.screen.DeathScreen;
-import net.minecraft.client.gui.screen.DisconnectedScreen;
-import net.minecraft.client.gui.screen.DownloadingTerrainScreen;
-import net.minecraft.client.gui.screen.Screen;
-import net.minecraft.client.gui.screen.MessageScreen;
-import net.minecraft.client.gui.screen.TitleScreen;
-import net.minecraft.client.gui.screen.multiplayer.ConnectScreen;
-import net.minecraft.client.gui.screen.ingame.AnvilScreen;
-import net.minecraft.client.gui.screen.ingame.BookScreen;
-import net.minecraft.client.gui.screen.ingame.CraftingScreen;
-import net.minecraft.client.gui.screen.ingame.EnchantmentScreen;
-import net.minecraft.client.gui.screen.ingame.FurnaceScreen;
-import net.minecraft.client.gui.screen.ingame.HandledScreen;
-import net.minecraft.client.gui.screen.ingame.InventoryScreen;
-import net.minecraft.client.gui.screen.ingame.MerchantScreen;
-import net.minecraft.client.gui.screen.ingame.SignEditScreen;
+import net.minecraft.client.gui.screens.ConnectScreen;
+import net.minecraft.client.gui.screens.DeathScreen;
+import net.minecraft.client.gui.screens.DisconnectedScreen;
+import net.minecraft.client.gui.screens.GenericMessageScreen;
+import net.minecraft.client.gui.screens.LevelLoadingScreen;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.gui.screens.TitleScreen;
+import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
+import net.minecraft.client.gui.screens.inventory.AnvilScreen;
+import net.minecraft.client.gui.screens.inventory.BookViewScreen;
+import net.minecraft.client.gui.screens.inventory.CraftingScreen;
+import net.minecraft.client.gui.screens.inventory.EnchantmentScreen;
+import net.minecraft.client.gui.screens.inventory.FurnaceScreen;
+import net.minecraft.client.gui.screens.inventory.InventoryScreen;
+import net.minecraft.client.gui.screens.inventory.MerchantScreen;
+import net.minecraft.client.gui.screens.inventory.SignEditScreen;
 
 /**
  * Stable, readable names for the screens a bot has to reason about.
@@ -49,8 +49,8 @@ public final class ScreenNames {
         if (screen instanceof ConnectScreen) return "connect";
         if (screen instanceof DisconnectedScreen) return "disconnected";
         if (screen instanceof DeathScreen) return "death";
-        if (screen instanceof DownloadingTerrainScreen) return "downloading";
-        if (screen instanceof MessageScreen) return "message";
+        if (screen instanceof LevelLoadingScreen) return "downloading";
+        if (screen instanceof GenericMessageScreen) return "message";
         if (screen instanceof InventoryScreen) return "inventory";
         if (screen instanceof CraftingScreen) return "crafting";
         if (screen instanceof FurnaceScreen) return "furnace";
@@ -58,8 +58,8 @@ public final class ScreenNames {
         if (screen instanceof EnchantmentScreen) return "enchanting";
         if (screen instanceof MerchantScreen) return "merchant";
         if (screen instanceof SignEditScreen) return "sign";
-        if (screen instanceof BookScreen) return "book";
-        if (screen instanceof HandledScreen<?>) return "container";
+        if (screen instanceof BookViewScreen) return "book";
+        if (screen instanceof AbstractContainerScreen<?>) return "container";
         return "other";
     }
 

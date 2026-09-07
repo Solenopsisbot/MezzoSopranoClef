@@ -21,7 +21,7 @@ from clef import ClefClient, ClefError
 
 with ClefClient(token="...") as bot:          # connect + auth; token also read from $CLEF_WS_TOKEN
     print("protocol", bot.protocol)
-    bot.connect_server("play.example.com")
+    bot.connect_server("play.example.com")            # version="auto" by default: any server 1.7.2..26.2
     bot.chat("hello from a corpse")
     try:
         bot.mine(10, 64, -3)
@@ -49,7 +49,7 @@ import { ClefClient, ClefError } from "./clef.ts";
 
 const bot = new ClefClient({ host: "127.0.0.1", port: 8731, token: "..." });
 await bot.connectRetry();
-await bot.connectServer("play.example.com");
+await bot.connectServer("play.example.com");         // version "auto" by default: any server 1.7.2..26.2
 
 bot.on("chat", (d) => console.log("chat:", d.text));
 await bot.subscribe("chat", "death");

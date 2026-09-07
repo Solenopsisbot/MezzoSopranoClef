@@ -2,11 +2,10 @@ package dev.mezzo.clef.api;
 
 import com.google.gson.JsonObject;
 import dev.mezzo.clef.api.ws.WsConnection;
-import net.minecraft.client.MinecraftClient;
-
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
+import net.minecraft.client.Minecraft;
 
 /**
  * Everything a command handler needs: the parsed args, who sent it, the owning server (for
@@ -33,7 +32,7 @@ public final class CommandContext {
     }
 
     public <T> T onMain(Supplier<T> task, int timeoutSeconds) {
-        MinecraftClient mc = MinecraftClient.getInstance();
+        Minecraft mc = Minecraft.getInstance();
         CompletableFuture<T> future = new CompletableFuture<>();
         mc.execute(() -> {
             try {

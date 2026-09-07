@@ -1,0 +1,102 @@
+// Native NeoForge build for Minecraft 1.20.6.
+//
+// The NeoForge target for this release. NeoForge uses Mojang's official mappings natively, which is the
+// same naming the whole Fabric matrix is built against — so `common/` and the per-release glue in
+// `../mc-1.20.6/` are shared verbatim, and only the loader-facing layer (entrypoint, platform,
+// event wiring) lives here.
+//
+// Built with ModDevGradle rather than Loom; the two plugins coexist because they are applied
+// per-project, not to the root build.
+plugins {
+    id 'net.neoforged.moddev'
+    id 'java'
+}
+
+ext {
+    mcVersion = '1.20.6'
+    neoForgeVersion = '20.6.141'
+    javaMajor = 21
+}
+
+group = rootProject.group
+version = rootProject.version
+base { archivesName = "mezzosopranoclef-neoforge-${mcVersion}" }
+
+neoForge {
+    version = neoForgeVersion
+
+    // Declares this source set as the mod, so ModDevGradle knows what to put on the mod path.
+    mods {
+        mezzoclef {
+            sourceSet sourceSets.main
+        }
+    }
+
+    runs {
+        client {
+            client()
+            // Match the Fabric targets' headless defaults so the same e2e probe drives both.
+            if (System.getProperty('mezzoclef.headless') == null) {
+                systemProperty 'mezzoclef.headless', 'true'
+            }
+            // NeoForge/Forge open an early "progress window" before the game starts, which needs
+            // GLFW to enumerate a monitor. A headless bot has no use for it, and on a machine with
+            // no active display it fails outright ("Failed to find a primary monitor"), taking the
+            // whole launch down with it. It is controlled by config/fml.toml rather than a system
+            // property, and FML writes that file itself on first run, so seed it before launching.
+            jvmArguments.addAll("-Xmx${project.findProperty('maxHeap') ?: '768m'}".toString(),
+                    '-XX:+UseG1GC', '-XX:MaxGCPauseMillis=50', '-XX:+UseStringDeduplication',
+                    '-XX:G1PeriodicGCInterval=15000', '-XX:MaxMetaspaceSize=256m')
+            System.properties.each { k, v ->
+                if (k.toString().startsWith('mezzoclef.')) systemProperty(k.toString(), v.toString())
+            }
+        }
+    }
+}
+
+sourceSets {
+    main {
+        // common/ is loader-neutral; mc-1.21.8/ is this release's Minecraft glue, shared with the
+        // Fabric 1.21.8 target. Only src/main/java here is NeoForge-specific.
+        java.srcDirs = ['../../common/src/main/java', '../mc-1.20.6/src/main/java', 'src/main/java']
+        resources.srcDirs = ['../../common/src/main/resources', 'src/main/resources']
+
+    }
+}
+
+repositories {
+    mavenCentral()
+    maven { name = 'NeoForged'; url = 'https://maven.neoforged.net/releases' }
+}
+
+java { toolchain { languageVersion = JavaLanguageVersion.of(javaMajor) } }
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = javaMajor
+}
+
+processResources {
+    inputs.property 'version', project.version
+    inputs.property 'minecraft_version', mcVersion
+    // NeoForge renamed this file to neoforge.mods.toml in 1.20.5; match either.
+    filesMatching(['META-INF/mods.toml', 'META-INF/neoforge.mods.toml']) {
+        expand version: project.version, minecraft_version: mcVersion, neoforge_version: neoForgeVersion
+    }
+}
+
+// FML reads earlyWindowControl from config/fml.toml, which it generates on first run. Seed the
+// file (or flip the flag if it already exists) before the client starts, so the early window is
+// never attempted on a headless host.
+tasks.named('runClient') {
+    doFirst {
+        def cfg = file("${projectDir}/run/config/fml.toml")
+        cfg.parentFile.mkdirs()
+        def text = cfg.exists() ? cfg.text : ""
+        if (text =~ /(?m)^earlyWindowControl\s*=/) {
+            text = text.replaceAll(/(?m)^earlyWindowControl\s*=.*$/, 'earlyWindowControl = false')
+        } else {
+            text += (text.endsWith("\n") || text.isEmpty() ? "" : "\n") + "earlyWindowControl = false\n"
+        }
+        cfg.text = text
+    }
+}

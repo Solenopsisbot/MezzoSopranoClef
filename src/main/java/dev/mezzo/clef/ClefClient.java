@@ -17,11 +17,10 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.screen.AccessibilityOnboardingScreen;
-import net.minecraft.client.gui.screen.TitleScreen;
-import net.minecraft.sound.SoundCategory;
-
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.AccessibilityOnboardingScreen;
+import net.minecraft.client.gui.screens.TitleScreen;
+import net.minecraft.sounds.SoundSource;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -105,7 +104,7 @@ public final class ClefClient implements ClientModInitializer {
                 }
             });
 
-            MinecraftClient.getInstance().execute(() -> {
+            Minecraft.getInstance().execute(() -> {
                 try {
                     SessionInjector.inject(session);
                     authReady = true;
@@ -152,7 +151,7 @@ public final class ClefClient implements ClientModInitializer {
         tokenRefresher.scheduleAtFixedRate(() -> {
             try {
                 MinecraftSession refreshed = am.refreshSession();
-                MinecraftClient.getInstance().execute(() -> {
+                Minecraft.getInstance().execute(() -> {
                     try {
                         SessionInjector.inject(refreshed);
                     } catch (Throwable t) {
@@ -180,7 +179,7 @@ public final class ClefClient implements ClientModInitializer {
         ClientReceiveMessageEvents.CHAT.register((message, signedMessage, sender, params, timestamp) -> {
             if (eventEmitter == null) return;
             eventEmitter.onMessage(EventEmitter.kindOf(params),
-                    sender != null ? sender.getName() : null, message);
+                    sender != null ? sender.name() : null, message);
         });
         ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
             if (control != null) control.emitEvent("connected", new JsonObject());
@@ -200,21 +199,18 @@ public final class ClefClient implements ClientModInitializer {
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
             if (control != null) control.emitEvent("disconnected", new JsonObject());
             if (eventEmitter != null) eventEmitter.reset();
-            if (services != null) {
-                services.craft.cancel("screen_changed");
-                services.combat.cancel("disconnected");
-            }
+            if (services != null) services.craft.cancel("screen_changed");
         });
     }
 
     /** Per-tick driver: actuation, crafting, world-state events, then deferred auto-connect. */
-    private void onClientTick(MinecraftClient mc) {
+    private void onClientTick(Minecraft mc) {
         // Mute audio cleanly (master volume -> 0) once options exist. We do NOT cancel the sound
         // engine — doing so crashes gameplay sounds (block breaks etc.) on a half-initialised
         // OpenAL. Volume 0 = silent, no crash. Headless Linux disables audio on its own anyway.
         if (!audioMuted && HeadlessController.get().isMuteAudio() && mc.options != null) {
             try {
-                mc.options.getSoundVolumeOption(SoundCategory.MASTER).setValue(0.0);
+                mc.options.getSoundSourceOptionInstance(SoundSource.MASTER).set(0.0);
             } catch (Throwable ignored) {
             }
             audioMuted = true;
@@ -234,8 +230,8 @@ public final class ClefClient implements ClientModInitializer {
         // Without this, auto-connect never fires on a fresh run dir.
         if (mc.options != null && mc.options.onboardAccessibility) {
             mc.options.onboardAccessibility = false;
-            if (mc.currentScreen instanceof AccessibilityOnboardingScreen) {
-                mc.setScreen(new TitleScreen());
+            if (mc.gui.screen() instanceof AccessibilityOnboardingScreen) {
+                mc.gui.setScreen(new TitleScreen());
             }
         }
 
@@ -243,13 +239,13 @@ public final class ClefClient implements ClientModInitializer {
         if (!MezzoClef.config().connection.autoConnect) return;
         if (connectStarted.get()) return;
 
-        if (mc.world != null) {                 // already in a world
+        if (mc.level != null) {                 // already in a world
             connectStarted.set(true);
             return;
         }
         // Ready = the resource reload finished (no overlay) and SOME menu screen is up. Don't
         // require TitleScreen specifically — first launch may sit on the onboarding screen.
-        if (mc.getOverlay() != null || mc.currentScreen == null) return;
+        if (mc.gui.overlay() != null || mc.gui.screen() == null) return;
         if (++warmupTicks < 20) return;          // ~1s of grace
 
         if (connectStarted.compareAndSet(false, true)) {

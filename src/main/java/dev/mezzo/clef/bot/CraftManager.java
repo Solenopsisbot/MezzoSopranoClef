@@ -1,14 +1,13 @@
 package dev.mezzo.clef.bot;
 
 import dev.mezzo.clef.MezzoClef;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.item.Item;
-import net.minecraft.recipe.NetworkRecipeId;
-import net.minecraft.screen.AbstractCraftingScreenHandler;
-import net.minecraft.screen.slot.Slot;
-import net.minecraft.screen.slot.SlotActionType;
-
 import java.util.concurrent.CompletableFuture;
+import net.minecraft.client.Minecraft;
+import net.minecraft.world.inventory.AbstractCraftingMenu;
+import net.minecraft.world.inventory.ContainerInput;
+import net.minecraft.world.inventory.Slot;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.crafting.display.RecipeDisplayId;
 
 /**
  * Drives crafting the way a player does, because that is the only way the server accepts it.
@@ -46,7 +45,7 @@ public final class CraftManager {
     private enum Phase { IDLE, REQUEST, WAIT_RESULT, SETTLE, CLEANUP }
 
     private Phase phase = Phase.IDLE;
-    private NetworkRecipeId recipeId;
+    private RecipeDisplayId recipeId;
     private Item target;
     private int wanted;
     private boolean all;
@@ -71,8 +70,8 @@ public final class CraftManager {
      *
      * @param all craft as many as the inventory allows, ignoring {@code count}
      */
-    public CompletableFuture<Result> start(MinecraftClient mc, AbstractCraftingScreenHandler handler,
-                                           NetworkRecipeId recipeId, Item target, int count, boolean all) {
+    public CompletableFuture<Result> start(Minecraft mc, AbstractCraftingMenu handler,
+                                           RecipeDisplayId recipeId, Item target, int count, boolean all) {
         CompletableFuture<Result> result = new CompletableFuture<>();
         if (isBusy()) {
             result.completeExceptionally(new IllegalStateException("a craft is already in progress"));
@@ -82,7 +81,7 @@ public final class CraftManager {
         this.target = target;
         this.wanted = all ? Integer.MAX_VALUE : Math.max(1, count);
         this.all = all;
-        this.syncId = handler.syncId;
+        this.syncId = handler.containerId;
         this.baseline = countTarget(mc);
         this.lastCount = baseline;
         this.phase = Phase.REQUEST;
@@ -99,9 +98,9 @@ public final class CraftManager {
         finish(lastCount - baseline, reason);
     }
 
-    public void tick(MinecraftClient mc) {
+    public void tick(Minecraft mc) {
         if (phase == Phase.IDLE) return;
-        if (mc.player == null || mc.interactionManager == null) {
+        if (mc.player == null || mc.gameMode == null) {
             finish(lastCount - baseline, "screen_changed");
             return;
         }
@@ -109,8 +108,8 @@ public final class CraftManager {
             finish(countTarget(mc) - baseline, "timeout");
             return;
         }
-        if (!(mc.player.currentScreenHandler instanceof AbstractCraftingScreenHandler handler)
-                || handler.syncId != syncId) {
+        if (!(mc.player.containerMenu instanceof AbstractCraftingMenu handler)
+                || handler.containerId != syncId) {
             // Someone opened a chest (or the server swapped our handler) — the recipe we're mid-way
             // through no longer has a grid to land in. Report what we got rather than clicking blind.
             finish(countTarget(mc) - baseline, "screen_changed");
@@ -122,14 +121,14 @@ public final class CraftManager {
             case REQUEST -> {
                 // craftAll fills the grid with as many recipe repetitions as the inventory allows,
                 // so a single shift-click on the output can produce a whole stack in one round-trip.
-                mc.interactionManager.clickRecipe(syncId, recipeId, all || wanted > 1);
+                mc.gameMode.handlePlaceRecipe(syncId, recipeId, all || wanted > 1);
                 phase = Phase.WAIT_RESULT;
                 phaseTicks = 0;
             }
             case WAIT_RESULT -> {
-                Slot output = handler.getOutputSlot();
-                if (!output.getStack().isEmpty()) {
-                    mc.interactionManager.clickSlot(syncId, output.id, 0, SlotActionType.QUICK_MOVE, mc.player);
+                Slot output = handler.getResultSlot();
+                if (!output.getItem().isEmpty()) {
+                    mc.gameMode.handleContainerInput(syncId, output.index, 0, ContainerInput.QUICK_MOVE, mc.player);
                     phase = Phase.SETTLE;
                     phaseTicks = 0;
                 } else if (phaseTicks > FILL_TIMEOUT_TICKS) {
@@ -169,9 +168,9 @@ public final class CraftManager {
                 // then give the sync a beat before reporting, so the caller's next `inventory` is right.
                 if (!cleanupClicked) {
                     cleanupClicked = true;
-                    for (Slot input : handler.getInputSlots()) {
-                        if (input.getStack().isEmpty()) continue;
-                        mc.interactionManager.clickSlot(syncId, input.id, 0, SlotActionType.QUICK_MOVE, mc.player);
+                    for (Slot input : handler.getInputGridSlots()) {
+                        if (input.getItem().isEmpty()) continue;
+                        mc.gameMode.handleContainerInput(syncId, input.index, 0, ContainerInput.QUICK_MOVE, mc.player);
                     }
                     phaseTicks = 0;
                     return;
@@ -183,12 +182,12 @@ public final class CraftManager {
         }
     }
 
-    private int countTarget(MinecraftClient mc) {
+    private int countTarget(Minecraft mc) {
         if (mc.player == null) return lastCount;
         var inv = mc.player.getInventory();
         int total = 0;
-        for (int i = 0; i < inv.size(); i++) {
-            var stack = inv.getStack(i);
+        for (int i = 0; i < inv.getContainerSize(); i++) {
+            var stack = inv.getItem(i);
             if (stack.getItem() == target) total += stack.getCount();
         }
         return total;

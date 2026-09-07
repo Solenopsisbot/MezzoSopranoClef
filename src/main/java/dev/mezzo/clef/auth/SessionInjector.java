@@ -2,14 +2,13 @@ package dev.mezzo.clef.auth;
 
 import dev.mezzo.clef.MezzoClef;
 import dev.mezzo.clef.mixin.client.MinecraftClientAccessor;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.session.Session;
-
 import java.util.Optional;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.User;
 
 /**
- * Swaps the live {@link Session} on the client so the bot connects as our authenticated
- * identity. Must run on the client thread, after the {@code MinecraftClient} instance exists
+ * Swaps the live {@link User} on the client so the bot connects as our authenticated
+ * identity. Must run on the client thread, after the {@code Minecraft} instance exists
  * but before connecting to a server.
  *
  * <p>Caveat: this updates the identity used for the server-join handshake (access token +
@@ -20,26 +19,22 @@ import java.util.Optional;
 public final class SessionInjector {
 
     public static void inject(MinecraftSession s) {
-        MinecraftClient mc = MinecraftClient.getInstance();
+        Minecraft mc = Minecraft.getInstance();
         if (mc == null) {
             throw new IllegalStateException("MinecraftClient not ready for session injection");
         }
-        Session.AccountType type = s.isOnline()
-                ? Session.AccountType.MSA
-                : Session.AccountType.LEGACY;
-
-        // 1.20.5+/1.21 ctor: (name, uuid, accessToken, Optional<xuid>, Optional<clientId>, AccountType)
-        Session vanilla = new Session(
+        // 26.x ctor: (name, uuid, accessToken, Optional<xuid>, Optional<clientId>) — the old AccountType
+        // parameter is gone; offline vs. Microsoft is now implied by whether a real token/UUID is present.
+        User vanilla = new User(
                 s.username(),
                 s.uuid(),
                 s.accessToken(),
                 Optional.ofNullable(s.xuid()),
-                Optional.empty(),
-                type);
+                Optional.empty());
 
         ((MinecraftClientAccessor) (Object) mc).clef$setSession(vanilla);
         MezzoClef.LOG.info("Injected {} session for {} ({})",
-                type, s.username(), s.uuid());
+                s.isOnline() ? "MSA" : "LEGACY", s.username(), s.uuid());
     }
 
     private SessionInjector() {}
