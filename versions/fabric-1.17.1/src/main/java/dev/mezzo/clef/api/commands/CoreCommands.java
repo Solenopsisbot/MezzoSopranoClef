@@ -1,0 +1,337 @@
+package dev.mezzo.clef.api.commands;
+
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
+import dev.mezzo.clef.MezzoClef;
+import dev.mezzo.clef.api.ApiException;
+import dev.mezzo.clef.api.ApiSchema;
+import dev.mezzo.clef.api.CommandDispatcher;
+import dev.mezzo.clef.bot.ServerConnector;
+import dev.mezzo.clef.version.ProtocolBridge;
+import dev.mezzo.clef.config.ClefConfig;
+import dev.mezzo.clef.headless.HeadlessController;
+import dev.mezzo.clef.nav.Navigator;
+import dev.mezzo.clef.screenshot.ScreenshotService;
+import java.util.Base64;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.User;
+import net.minecraft.client.gui.screens.TitleScreen;
+import net.minecraft.client.multiplayer.PlayerInfo;
+
+/** Registers the built-in control-plane commands. Add your own bot behaviours here. */
+public final class CoreCommands {
+
+    public static void registerAll(CommandDispatcher d) {
+
+        d.register("ping", "liveness check", ctx -> {
+            JsonObject o = new JsonObject();
+            o.addProperty("pong", true);
+            o.addProperty("time", System.currentTimeMillis());
+            return o;
+        });
+
+        d.register("help", "list all commands", ctx -> {
+            JsonObject o = new JsonObject();
+            ctx.server.dispatcher().help().forEach(o::addProperty);
+            return o;
+        });
+
+        d.register("schema",
+                "machine-readable API contract: commands+args, events+fields, error codes, protocol version",
+                ctx -> ApiSchema.toJson(ctx.server.dispatcher().help()));
+
+        d.register("stats", "runtime perf counters: process CPU time, suppressed sound work, skipped frames", ctx -> {
+            HeadlessController hc = HeadlessController.get();
+            JsonObject o = new JsonObject();
+            o.addProperty("uptimeMs", java.lang.management.ManagementFactory.getRuntimeMXBean().getUptime());
+            ProcessHandle.current().info().totalCpuDuration()
+                    .ifPresent(cpu -> o.addProperty("cpuMs", cpu.toMillis()));
+            o.addProperty("soundsSuppressed", hc.soundsSuppressed());
+            o.addProperty("skippedFrames", hc.skippedFrames());
+            o.addProperty("commandsHandled", ctx.server.commandsHandled());
+            o.addProperty("commandsFailed", ctx.server.commandsFailed());
+            long handled = Math.max(1, ctx.server.commandsHandled());
+            o.addProperty("commandAvgMs", (ctx.server.commandTotalNanos() / 1_000_000.0) / handled);
+            o.addProperty("disableSound", hc.isDisableSound());
+            o.addProperty("noGl", hc.isNoGl());
+            o.addProperty("muteAudio", hc.isMuteAudio());
+            return o;
+        });
+
+        d.register("optimize", "toggle the muted-sound short-circuit at runtime {sound?}", ctx -> {
+            HeadlessController hc = HeadlessController.get();
+            if (ctx.has("sound")) hc.setDisableSound(ctx.bool("sound", true));
+            JsonObject o = new JsonObject();
+            o.addProperty("disableSound", hc.isDisableSound());
+            return o;
+        });
+
+        d.register("subscribe", "stream events to this connection {events:[...] or omit for all}", ctx -> {
+            java.util.Set<String> subs = java.util.concurrent.ConcurrentHashMap.newKeySet();
+            if (ctx.args.has("events") && ctx.args.get("events").isJsonArray()) {
+                ctx.args.getAsJsonArray("events").forEach(e -> subs.add(e.getAsString()));
+            } else {
+                subs.add("*");
+            }
+            ctx.origin.attributes.put("subs", subs);
+            JsonObject o = new JsonObject();
+            JsonArray a = new JsonArray();
+            subs.forEach(a::add);
+            o.add("subscribed", a);
+            return o;
+        });
+
+        d.register("unsubscribe", "stop streaming events to this connection", ctx -> {
+            ctx.origin.attributes.remove("subs");
+            JsonObject o = new JsonObject();
+            o.addProperty("unsubscribed", true);
+            return o;
+        });
+
+        d.register("events", "list every event type you can subscribe to", ctx -> {
+            // Sourced from ApiSchema (single source of truth); `schema` returns the field shapes too.
+            JsonObject o2 = new JsonObject();
+            o2.add("events", ApiSchema.eventDescriptions());
+            o2.addProperty("subscribeAll", "subscribe with no args (or events:['*']) for everything");
+            return o2;
+        });
+
+        d.register("status", "bot, world and player status", ctx -> ctx.onMain(() -> {
+            Minecraft mc = Minecraft.getInstance();
+            HeadlessController hc = HeadlessController.get();
+            JsonObject o = new JsonObject();
+            o.addProperty("headless", hc.isHeadless());
+            o.addProperty("noGl", hc.isNoGl());             // true = booted GPU-free (no OpenGL context)
+            o.addProperty("noWindow", hc.isNoWindow());     // true = GLFW null platform (no display server)
+            o.addProperty("skippedFrames", hc.skippedFrames());
+            o.addProperty("controllers", ctx.server.connectionCount());
+            o.addProperty("singleplayer", mc.isLocalServer());
+            o.addProperty("screen", mc.screen != null ? mc.screen.getClass().getSimpleName() : "none");
+            o.addProperty("overlay", mc.getOverlay() != null ? mc.getOverlay().getClass().getSimpleName() : "none");
+            if (mc.getCurrentServer() != null) {
+                o.addProperty("server", mc.getCurrentServer().ip);
+            }
+            boolean inWorld = mc.level != null && mc.player != null;
+            o.addProperty("inWorld", inWorld);
+            if (inWorld) {
+                JsonObject p = new JsonObject();
+                p.addProperty("x", mc.player.getX());
+                p.addProperty("y", mc.player.getY());
+                p.addProperty("z", mc.player.getZ());
+                p.addProperty("yaw", mc.player.getYRot());
+                p.addProperty("pitch", mc.player.getXRot());
+                p.addProperty("health", mc.player.getHealth());
+                p.addProperty("food", mc.player.getFoodData().getFoodLevel());
+                p.addProperty("xpLevel", mc.player.experienceLevel);
+                p.addProperty("xpProgress", mc.player.experienceProgress);
+                p.addProperty("onGround", mc.player.isOnGround());
+                p.addProperty("usingItem", mc.player.isUsingItem());
+                p.addProperty("selectedSlot", mc.player.getInventory().selected);
+                var held = mc.player.getMainHandItem();
+                p.addProperty("heldItem", held.isEmpty() ? "empty"
+                        : net.minecraft.core.Registry.ITEM.getKey(held.getItem()) + " x" + held.getCount());
+                p.addProperty("dimension", mc.level.dimension().location().toString());
+                o.add("player", p);
+            }
+            o.addProperty("navBackend", ctx.server.services.navigator.backend());
+            o.addProperty("navActive", ctx.server.services.navigator.isActive());
+            o.addProperty("screenshotBackend", ctx.server.services.screenshots.backend());
+            o.add("protocol", ProtocolBridge.get().describeJson());
+            return o;
+        }));
+
+        d.register("auth.status", "current logged-in identity", ctx -> ctx.onMain(() -> {
+            User s = Minecraft.getInstance().getUser();
+            JsonObject o = new JsonObject();
+            o.addProperty("username", s.getName());
+            // User exposes the id as a String here; getProfileId()/UUID arrives in 1.19.3. The
+            // account type is carried explicitly on this release, so report it directly.
+            o.addProperty("uuid", s.getUuid());
+            // Report the type of the session we actually injected. There is nothing on User to
+            // infer it from: 26.x dropped User.Type, and getProfileId() is non-null for offline
+            // sessions too (OfflineAuth derives a stable UUID), so a null check there calls every
+            // offline bot "MSA" — the default mode for the e2e scripts and the Docker image.
+            o.addProperty("type", dev.mezzo.clef.auth.AuthManager.activeAccountType());
+            return o;
+        }));
+
+        d.register("control.rotateToken", "rotate the full-control WebSocket token and persist config", ctx -> {
+            String token = ClefConfig.generateAuthToken();
+            MezzoClef.config().control.authToken = token;
+            MezzoClef.config().save(MezzoClef.configPath());
+            JsonObject o = new JsonObject();
+            o.addProperty("rotated", true);
+            o.addProperty("authToken", token);
+            return o;
+        });
+
+        d.register("connect", "join a server {host, port?, version?} — version: auto|native|1.12.2…", ctx -> {
+            String host = ctx.requireStr("host");
+            int port = ctx.i("port", 25565);
+            String version = ctx.str("version", MezzoClef.config().connection.serverVersion);
+            // Version selection can fail (unknown release, ViaFabricPlus missing); surface that as a
+            // clean error instead of an async log line, so run it synchronously on the client thread.
+            String selected = ctx.onMain(() -> {
+                try {
+                    return ServerConnector.connect(host, port, version);
+                } catch (IllegalArgumentException | IllegalStateException e) {
+                    throw ApiException.badArgs(e.getMessage());
+                }
+            });
+            JsonObject o = new JsonObject();
+            o.addProperty("connecting", true);
+            o.addProperty("host", host);
+            o.addProperty("port", port);
+            o.addProperty("version", selected);
+            return o;
+        });
+
+        d.register("protocol", "server-version support: ViaFabricPlus state, native version, current target, all joinable releases", ctx -> {
+            ProtocolBridge bridge = ProtocolBridge.get();
+            JsonObject o = bridge.describeJson();
+            o.add("versions", bridge.supportedVersions());
+            return o;
+        });
+
+        d.register("disconnect", "leave the current world", ctx -> ctx.onMain(() -> {
+            // This era: clearLevel(Screen returnTo); the disconnect(...) overloads came later.
+            Minecraft.getInstance().clearLevel(new TitleScreen());
+            JsonObject o = new JsonObject();
+            o.addProperty("disconnected", true);
+            return o;
+        }));
+
+        d.register("chat", "send chat, or a /command if prefixed with '/' {message}", ctx -> {
+            String msg = ctx.requireStr("message");
+            return ctx.onMain(() -> {
+                Minecraft mc = Minecraft.getInstance();
+                if (mc.getConnection() == null || mc.player == null) throw ApiException.notConnected();
+                // No chat signing before 1.19, so there is a single send path and it takes the
+                // leading '/' verbatim — the server decides what is a command.
+                mc.player.chat(msg);
+                JsonObject o = new JsonObject();
+                o.addProperty("sent", true);
+                return o;
+            });
+        });
+
+        d.register("look", "set view direction {yaw, pitch}", ctx -> {
+            float yaw = ctx.has("yaw") ? ctx.f("yaw", 0) : Float.NaN;
+            float pitch = ctx.has("pitch") ? ctx.f("pitch", 0) : Float.NaN;
+            return ctx.onMain(() -> {
+                Minecraft mc = Minecraft.getInstance();
+                if (mc.player == null) throw ApiException.notInWorld();
+                if (!Float.isNaN(yaw)) {
+                    mc.player.setYRot(yaw);
+                    mc.player.setYHeadRot(yaw);
+                    mc.player.setYBodyRot(yaw);
+                }
+                if (!Float.isNaN(pitch)) mc.player.setXRot(pitch);
+                JsonObject o = new JsonObject();
+                o.addProperty("yaw", mc.player.getYRot());
+                o.addProperty("pitch", mc.player.getXRot());
+                return o;
+            });
+        });
+
+        d.register("players", "list tab-list players", ctx -> ctx.onMain(() -> {
+            Minecraft mc = Minecraft.getInstance();
+            JsonArray arr = new JsonArray();
+            if (mc.getConnection() != null) {
+                for (PlayerInfo e : mc.getConnection().getOnlinePlayers()) {
+                    JsonObject p = new JsonObject();
+                    p.addProperty("name", e.getProfile().getName());
+                    p.addProperty("id", e.getProfile().getId().toString());
+                    p.addProperty("ping", e.getLatency());
+                    arr.add(p);
+                }
+            }
+            return arr;
+        }));
+
+        d.register("headless", "toggle render-skip {enabled?}", ctx -> {
+            if (ctx.has("enabled")) HeadlessController.get().setHeadless(ctx.bool("enabled", true));
+            JsonObject o = new JsonObject();
+            o.addProperty("headless", HeadlessController.get().isHeadless());
+            return o;
+        });
+
+        d.register("screenshot",
+                "render a PNG at any {x,y,z,yaw,pitch,width,height,fov} -> base64 (defaults: player view)",
+                ctx -> {
+                    ScreenshotService.CaptureRequest req = new ScreenshotService.CaptureRequest(
+                            ctx.has("x") ? Double.valueOf(ctx.d("x", 0)) : null,
+                            ctx.has("y") ? Double.valueOf(ctx.d("y", 0)) : null,
+                            ctx.has("z") ? Double.valueOf(ctx.d("z", 0)) : null,
+                            ctx.has("yaw") ? Float.valueOf(ctx.f("yaw", 0)) : null,
+                            ctx.has("pitch") ? Float.valueOf(ctx.f("pitch", 0)) : null,
+                            ctx.has("width") ? Integer.valueOf(ctx.i("width", 0)) : null,
+                            ctx.has("height") ? Integer.valueOf(ctx.i("height", 0)) : null,
+                            ctx.has("fov") ? Float.valueOf(ctx.f("fov", 0)) : null);
+                    // capture() bounces to the client thread internally; software backend
+                    // rasterizes off-thread so it won't stall ticks.
+                    byte[] png = ctx.server.services.screenshots.capture(req);
+                    JsonObject o = new JsonObject();
+                    o.addProperty("format", "png");
+                    o.addProperty("backend", ctx.server.services.screenshots.backend());
+                    o.addProperty("bytes", png.length);
+                    ScreenshotService.CaptureMetrics m = ctx.server.services.screenshots.lastMetrics();
+                    if (m != null) {
+                        o.addProperty("durationMs", m.totalMs());
+                        o.addProperty("snapshotMs", m.snapshotMs());
+                        o.addProperty("renderMs", m.renderMs());
+                        o.addProperty("pngMs", m.pngMs());
+                    }
+                    o.addProperty("base64", Base64.getEncoder().encodeToString(png));
+                    return o;
+                });
+
+        d.register("goto", "Baritone path to {x,y,z} or {x,z}", ctx -> {
+            Navigator nav = ctx.server.services.navigator;
+            int x = ctx.requireInt("x");
+            int z = ctx.requireInt("z");
+            boolean hasY = ctx.has("y");
+            int y = ctx.i("y", 0);
+            ctx.server.services.input.clear(); // hand movement to Baritone; stop fighting it
+            ctx.onMain(() -> {
+                if (hasY) nav.goTo(x, y, z);
+                else nav.goToXZ(x, z);
+                return Boolean.TRUE;
+            });
+            JsonObject o = new JsonObject();
+            o.addProperty("pathing", true);
+            o.addProperty("backend", nav.backend());
+            return o;
+        });
+
+        d.register("baritone", "run any Baritone command (full feature set, if Baritone is installed) {command}", ctx -> {
+            String cmd = ctx.requireStr("command");
+            Navigator nav = ctx.server.services.navigator;
+            ctx.server.services.input.clear(); // hand movement to Baritone
+            ctx.onMain(() -> { nav.runCommand(cmd); return Boolean.TRUE; });
+            JsonObject o = new JsonObject();
+            o.addProperty("ran", cmd);
+            o.addProperty("backend", nav.backend());
+            return o;
+        });
+
+        d.register("nav.stop", "cancel Baritone pathing", ctx -> {
+            Navigator nav = ctx.server.services.navigator;
+            ctx.onMain(() -> { nav.stop(); return Boolean.TRUE; });
+            JsonObject o = new JsonObject();
+            o.addProperty("stopped", true);
+            return o;
+        });
+
+        d.register("nav.status", "pathfinding availability + state", ctx -> {
+            Navigator nav = ctx.server.services.navigator;
+            JsonObject o = new JsonObject();
+            o.addProperty("available", nav.isAvailable());
+            o.addProperty("backend", nav.backend());
+            o.addProperty("active", nav.isActive());
+            return o;
+        });
+    }
+
+    private CoreCommands() {}
+}

@@ -1,0 +1,33 @@
+modLoader = "javafml"
+loaderVersion = "[1,)"
+license = "MIT"
+issueTrackerURL = ""
+
+[[mods]]
+modId = "mezzoclef"
+version = "${version}"
+displayName = "MezzoSopranoClef"
+authors = "Solenopsisbot"
+description = '''
+Headless, render-on-demand Minecraft client built for botting. Microsoft OAuth + offline auth,
+WebSocket/JSON control plane, on-demand offscreen screenshots, optional Baritone pathfinding.
+'''
+
+# Mixins are declared here rather than in a loader-specific field: NeoForge runs on Mojang
+# mappings, which is what these mixins are already written against, so no refmap is needed.
+[[mixins]]
+config = "mezzoclef.mixins.json"
+
+[[dependencies.mezzoclef]]
+modId = "neoforge"
+type = "required"
+versionRange = "[${neoforge_version},)"
+ordering = "NONE"
+side = "CLIENT"
+
+[[dependencies.mezzoclef]]
+modId = "minecraft"
+type = "required"
+versionRange = "[1.20.6]"
+ordering = "NONE"
+side = "CLIENT"

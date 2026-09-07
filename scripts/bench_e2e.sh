@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# A/B benchmark of the muted-sound short-circuit, end-to-end against a REAL Minecraft 1.21.8
+# A/B benchmark of the muted-sound short-circuit, end-to-end against a REAL Minecraft (client-version)
 # server + the real headless bot. Boots the server, boots the bot once, then bench_subsystems.py
 # applies a fixed in-world load (a mob horde whose ambient sounds drive the load) and toggles the
 # sound disable on/off/on IN-PROCESS, comparing process CPU over equal windows (same world + JIT).

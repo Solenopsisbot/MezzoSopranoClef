@@ -1,6 +1,24 @@
 plugins {
-    id 'fabric-loom' version '1.17.11'
+    // `net.fabricmc.fabric-loom` is the unobfuscated-Minecraft flavour of Loom (26.1+): no
+    // Yarn/intermediary, no remapping. Plain `implementation`/`runtimeOnly` replace the old
+    // `modImplementation`/`modRuntimeOnly`, and `jar` is the final artifact (no `remapJar`).
+    id 'net.fabricmc.fabric-loom'
     id 'java'
+}
+
+// ---------------------------------------------------------------------------
+// Source layout: `common/` holds every class that compiles unchanged against ANY supported
+// Minecraft version (control plane, schema, auth, software renderer, config, Baritone bridge,
+// ViaFabricPlus bridge). Each version target — this root project for the newest release, and
+// each `versions/<loader>-<mc>` module for older ones — adds only the Minecraft-facing glue and
+// its mixins on top. That is what makes per-version mod support possible: every target is a real
+// mod jar built against that release, not a protocol shim.
+// ---------------------------------------------------------------------------
+sourceSets {
+    main {
+        java.srcDirs = ['src/main/java', 'common/src/main/java', 'fabric-common/src/main/java']
+        resources.srcDirs = ['src/main/resources', 'common/src/main/resources']
+    }
 }
 
 base { archivesName = project.archives_base_name }
@@ -13,8 +31,13 @@ repositories {
     // nested jar loads fine, but Loom's *dev* runtime doesn't extract nested jars, so we add it
     // explicitly here for `runClient` (otherwise Baritone's startup init NoClassDefFounds).
     maven { name = 'Babbaj'; url = 'https://babbaj.github.io/maven/' }
+    // ViaFabricPlus is published on the Modrinth maven (group `maven.modrinth`, artifact = slug).
+    exclusiveContent {
+        forRepository { maven { name = 'Modrinth'; url = 'https://api.modrinth.com/maven' } }
+        filter { includeGroup('maven.modrinth') }
+    }
     // Auto-download Baritone straight from its GitHub release assets (no maven publishes the
-    // 1.21.8 build). We use the UNoptimized fabric jar on purpose: the "standalone" build
+    // current build). We use the UNoptimized fabric jar on purpose: the "standalone" build
     // obfuscates the public baritone.api.* package, which would break our reflective bridge.
     exclusiveContent {
         forRepository {
@@ -72,20 +95,37 @@ loom {
     }
 }
 
+configurations {
+    // The ViaFabricPlus jar, resolved on its own (no transitives: it nests everything it needs).
+    viaFabricPlus { transitive = false; canBeConsumed = false }
+}
+
 dependencies {
+    // 26.x is shipped unobfuscated by Mojang, so there is no `mappings` line: the source is
+    // written directly against Mojang's names (see gradle.properties).
     minecraft "com.mojang:minecraft:${project.minecraft_version}"
-    mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
-    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
-    modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+    implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+
+    // ViaFabricPlus — client-side ViaVersion. This is what makes one 26.2 client able to join
+    // servers on every release back to 1.7.2 (our support matrix is 1.12.2..26.2). It is
+    // deliberately NOT a classpath/`include` dependency: it is GPL-3.0 and we are MIT, so the
+    // standalone launcher downloads it next to the mod instead of us redistributing it inside our
+    // jar, and for dev runs `installViaFabricPlusDev` copies it into the run dir's mods/ (where
+    // Fabric Loader also unpacks its ~30 nested jars, which it won't do for classpath mods). The
+    // bot talks to it reflectively (see dev.mezzo.clef.version.ProtocolBridge) — no compile dep.
+    if (project.findProperty('with_viafabricplus') != 'false') {
+        viaFabricPlus "maven.modrinth:viafabricplus:${project.viafabricplus_version}"
+    }
 
     // Baritone — auto-downloaded + bundled (jar-in-jar) by default. The bot drives it
-    // reflectively (no compile dependency), so it's modRuntimeOnly. Toggle with
+    // reflectively (no compile dependency), so it's runtimeOnly. Toggle with
     // -Pbundle_baritone=false (or in gradle.properties) to ship without it.
     if (project.findProperty('bundle_baritone') != 'false') {
-        modRuntimeOnly "baritone-dist:baritone-unoptimized-fabric:${project.baritone_version}"
+        runtimeOnly "baritone-dist:baritone-unoptimized-fabric:${project.baritone_version}"
         include "baritone-dist:baritone-unoptimized-fabric:${project.baritone_version}"
         // dev-runtime only: Baritone's nested elytra native lib (bundled in prod via JiJ).
-        runtimeOnly "dev.babbaj:nether-pathfinder:1.4.1"
+        runtimeOnly "dev.babbaj:nether-pathfinder:1.6"
     }
 
     // NOTE: WebSocket control plane is hand-rolled (RFC6455) over java.net sockets and
@@ -108,15 +148,39 @@ test {
 }
 
 java {
-    // Auto-provisioned by foojay if a local JDK 21 isn't found.
-    toolchain { languageVersion = JavaLanguageVersion.of(21) }
+    // Minecraft 26.x requires Java 25. Auto-provisioned by foojay if a local JDK 25 isn't found.
+    toolchain { languageVersion = JavaLanguageVersion.of(25) }
     withSourcesJar()
 }
 
 tasks.withType(JavaCompile).configureEach {
     it.options.encoding = 'UTF-8'
-    it.options.release = 21
+    it.options.release = 25
 }
+
+// Stage ViaFabricPlus into the dev run dir (run/mods, or run-profiles/<profile>/mods) before
+// `runClient`, so the dev client has the same multi-version reach as the launcher-installed one.
+// With -Pwith_viafabricplus=false the stale copy is removed instead.
+def devRunDir = project.findProperty('profile') ? "run-profiles/${project.findProperty('profile')}" : 'run'
+tasks.register('installViaFabricPlusDev') {
+    description = 'Copies the pinned ViaFabricPlus jar into the dev run dir mods/ folder.'
+    def modsDir = file("${devRunDir}/mods")
+    def enabled = project.findProperty('with_viafabricplus') != 'false'
+    inputs.files(configurations.viaFabricPlus)
+    outputs.file(new File(modsDir, 'viafabricplus.jar'))
+    doLast {
+        def target = new File(modsDir, 'viafabricplus.jar')
+        if (!enabled) {
+            if (target.delete()) println "[viafabricplus] disabled — removed ${target}"
+            return
+        }
+        modsDir.mkdirs()
+        def jar = configurations.viaFabricPlus.singleFile
+        java.nio.file.Files.copy(jar.toPath(), target.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+        println "[viafabricplus] ${project.viafabricplus_version} -> ${target}"
+    }
+}
+tasks.named('runClient') { dependsOn 'installViaFabricPlusDev' }
 
 processResources {
     inputs.property 'version', project.version
@@ -291,6 +355,12 @@ tasks.register('runFleet') {
             int dashPort = dashBase + i
             File gameDir = file("run-fleet/${name}")
             gameDir.mkdirs()
+            // Same multi-version reach as runClient: ViaFabricPlus in this bot's mods/.
+            if (project.findProperty('with_viafabricplus') != 'false' && !dryRun) {
+                File mods = new File(gameDir, 'mods'); mods.mkdirs()
+                java.nio.file.Files.copy(configurations.viaFabricPlus.singleFile.toPath(),
+                        new File(mods, 'viafabricplus.jar').toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+            }
 
             def jvm = new ArrayList(baseJvm)
             jvm << "-Dmezzoclef.headless=true"
@@ -364,5 +434,120 @@ tasks.register('runFleet') {
             try { Runtime.runtime.removeShutdownHook(hook) } catch (ignored) {}
             fleetStop(procs)
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// verifyVersionMatrix — sanity-check the support matrix and the client pins.
+//   * every release in minecraft-versions.json exists in Mojang's manifest (release type)
+//   * the matrix client version == gradle.properties minecraft_version
+//   * Fabric API, ViaFabricPlus and Baritone are published for that Minecraft version
+// Network access required. This does NOT prove servers are joinable — that's what
+// scripts/verify_versions.sh is for; this only catches drift in the data and the pins.
+// ---------------------------------------------------------------------------
+tasks.register('verifyVersionMatrix') {
+    description = 'Checks minecraft-versions.json against Mojang\'s manifest and verifies the client dependency pins resolve.'
+    doLast {
+        def slurper = new groovy.json.JsonSlurper()
+        def matrix = slurper.parse(file('minecraft-versions.json'))
+        def mc = project.minecraft_version
+        if (matrix.client.minecraft != mc) {
+            throw new GradleException("minecraft-versions.json client.minecraft=${matrix.client.minecraft} but gradle.properties minecraft_version=${mc}")
+        }
+        def manifest = slurper.parseText(new URI('https://piston-meta.mojang.com/mc/game/version_manifest_v2.json').toURL().text)
+        def releases = manifest.versions.findAll { it.type == 'release' }.collect { it.id }.toSet()
+        if (!releases.contains(mc)) throw new GradleException("Client version ${mc} is not a Mojang release")
+        matrix.servers.each { entry ->
+            if (!releases.contains(entry.version)) throw new GradleException("Matrix server version ${entry.version} is not a Mojang release")
+        }
+        def statuses = matrix.servers.countBy { it.status }
+        println "matrix: ${matrix.servers.size()} server releases (${statuses}) — all present in Mojang's manifest"
+
+        // --- native client builds: every claim must correspond to a module that is really here ---
+        def natives = matrix.nativeClients
+        if (!natives) throw new GradleException('minecraft-versions.json has no nativeClients')
+        def rootMc = project.minecraft_version
+        natives.each { entry ->
+            def mcv = entry.minecraft.toString()
+            if (!releases.contains(mcv)) throw new GradleException("Native target ${mcv} is not a Mojang release")
+            if (!(entry.status in ['runtime-verified', 'jar-built'])) {
+                throw new GradleException("Native target ${mcv} has unknown status ${entry.status}")
+            }
+            if (mcv == rootMc) {
+                // The newest release is the root project rather than a versions/ module.
+                if (entry.module != '(root project)') {
+                    throw new GradleException("Native target ${mcv} should be the root project, got ${entry.module}")
+                }
+            } else {
+                // Check the module the entry actually declares. Assuming versions/fabric-<mc> made
+                // every NeoForge and Forge entry pass on its Fabric twin's directory — deleting
+                // versions/neoforge-1.21.8 would not have failed this check.
+                def loader = (entry.loader ?: 'fabric').toString()
+                def moduleName = "${loader}-${mcv}"
+                def dir = file("versions/${moduleName}")
+                if (entry.module && entry.module.toString() != "versions/${moduleName}") {
+                    throw new GradleException("Native target ${loader} ${mcv} declares module ${entry.module}, expected versions/${moduleName}")
+                }
+                if (!dir.isDirectory()) throw new GradleException("Native target ${loader} ${mcv} claims a module that does not exist: ${dir}")
+                if (!new File(dir, 'build.gradle').isFile()) throw new GradleException("Native target ${loader} ${mcv} has no build.gradle")
+                if (!settingsFileIncludes(moduleName)) throw new GradleException("Native target ${loader} ${mcv} is not included in settings.gradle")
+
+                // The module must also agree with itself about which release it is. This was wrong
+                // in 13 modules because the scaffolder copied the donor's constant verbatim, and on
+                // Forge it fed ModPlatform.minecraftVersion().
+                def caps = new File(dir, "src/main/java/dev/mezzo/clef/version/VersionCapabilities.java")
+                if (caps.isFile()) {
+                    def declared = (caps.text =~ /MINECRAFT = "([^"]*)"/)
+                    if (declared && declared[0][1] != mcv) {
+                        throw new GradleException("Native target ${loader} ${mcv} declares MINECRAFT = \"${declared[0][1]}\" in VersionCapabilities")
+                    }
+                }
+            }
+        }
+        def nativeStatuses = natives.countBy { it.status }
+        println "native client builds: ${natives.size()} targets (${nativeStatuses})"
+
+        def head = { String url ->
+            def c = new URI(url).toURL().openConnection()
+            c.requestMethod = 'HEAD'; c.instanceFollowRedirects = true
+            c.setRequestProperty('User-Agent', 'MezzoSopranoClef-build')
+            c.responseCode
+        }
+        def api = project.fabric_api_version
+        def apiUrl = "https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/${api}/fabric-api-${api}.jar"
+        if (head(apiUrl) != 200) throw new GradleException("Fabric API ${api} is not published")
+        if (!api.endsWith("+${mc}")) throw new GradleException("Fabric API ${api} does not target Minecraft ${mc}")
+        println "fabric-api ${api}: published"
+
+        def viaUrl = "https://api.modrinth.com/v2/project/viafabricplus/version/${project.viafabricplus_version}"
+        def viaConn = new URI(viaUrl).toURL().openConnection()
+        viaConn.setRequestProperty('User-Agent', 'MezzoSopranoClef-build')
+        def via = slurper.parseText(viaConn.inputStream.text)
+        if (!(via.game_versions.contains(mc))) {
+            throw new GradleException("ViaFabricPlus ${project.viafabricplus_version} targets ${via.game_versions}, not ${mc}")
+        }
+        println "viafabricplus ${project.viafabricplus_version}: published for ${mc}"
+
+        def bv = project.baritone_version
+        def baritoneUrl = "https://github.com/cabaletta/baritone/releases/download/v${bv}/baritone-unoptimized-fabric-${bv}.jar"
+        if (head(baritoneUrl) != 200) throw new GradleException("Baritone ${bv} fabric jar is not published")
+        println "baritone ${bv}: published"
+    }
+}
+
+
+/** True when settings.gradle actually wires this native target into the build. */
+def settingsFileIncludes(String moduleName) {
+    file('settings.gradle').text.contains("include 'versions:${moduleName}'")
+}
+
+// Build every native per-version client jar in one go (the root project is the newest release).
+tasks.register('buildAllVersions') {
+    description = 'Builds the mod jar for every native per-version target plus the newest-release root build.'
+    dependsOn 'build'
+    dependsOn subprojects.findAll { it.path.startsWith(':versions:') }.collect { "${it.path}:build" }
+    doLast {
+        def targets = subprojects.findAll { it.path.startsWith(':versions:') }.collect { it.name }
+        println "Built native client jars for: ${(['(root) ' + project.minecraft_version] + targets).join(', ')}"
     }
 }

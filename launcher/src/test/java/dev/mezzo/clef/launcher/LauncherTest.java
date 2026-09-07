@@ -50,4 +50,14 @@ class LauncherTest {
         m.setAccessible(true);
         return (boolean) m.invoke(null, file, size, sha1);
     }
+
+    @Test
+    void pickPrimaryFilePrefersPrimaryThenFirst() {
+        com.google.gson.JsonArray files = com.google.gson.JsonParser.parseString(
+                "[{\"url\":\"a\",\"primary\":false},{\"url\":\"b\",\"primary\":true}]").getAsJsonArray();
+        assertEquals("b", Launcher.pickPrimaryFile(files).get("url").getAsString());
+        com.google.gson.JsonArray noPrimary = com.google.gson.JsonParser.parseString(
+                "[{\"url\":\"only\"}]").getAsJsonArray();
+        assertEquals("only", Launcher.pickPrimaryFile(noPrimary).get("url").getAsString());
+    }
 }

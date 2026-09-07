@@ -1,0 +1,118 @@
+// Native MinecraftForge build for Minecraft 1.20.1.
+//
+// The third loader. Built with ModDevGradle's legacy-Forge flavour rather than ForgeGradle, so it
+// stays in the same plugin family as the NeoForge targets. `common/` and `../mc-1.20.1/` are shared
+// verbatim with the Fabric 1.20.1 target; only the loader layer lives here.
+//
+// Unlike Fabric and NeoForge, Forge runs on SRG names at runtime, so mixins need a refmap — see
+// the obfuscation block below.
+plugins {
+    id 'net.neoforged.moddev.legacyforge'
+    id 'java'
+}
+
+ext {
+    mcVersion = '1.20.1'
+    forgeVersion = '1.20.1-47.4.23'
+    javaMajor = 17
+}
+
+group = rootProject.group
+version = rootProject.version
+base { archivesName = "mezzosopranoclef-forge-${mcVersion}" }
+
+legacyForge {
+    version = forgeVersion
+
+    mods {
+        mezzoclef {
+            sourceSet sourceSets.main
+        }
+    }
+
+    runs {
+        client {
+            client()
+            if (System.getProperty('mezzoclef.headless') == null) {
+                systemProperty 'mezzoclef.headless', 'true'
+            }
+            // NeoForge/Forge open an early "progress window" before the game starts, which needs
+            // GLFW to enumerate a monitor. A headless bot has no use for it, and on a machine with
+            // no active display it fails outright ("Failed to find a primary monitor"), taking the
+            // whole launch down with it. It is controlled by config/fml.toml rather than a system
+            // property, and FML writes that file itself on first run, so seed it before launching.
+            jvmArguments.addAll("-Xmx${project.findProperty('maxHeap') ?: '768m'}".toString(),
+                    '-XX:+UseG1GC', '-XX:MaxGCPauseMillis=50', '-XX:+UseStringDeduplication',
+                    '-XX:G1PeriodicGCInterval=15000', '-XX:MaxMetaspaceSize=256m')
+            System.properties.each { k, v ->
+                if (k.toString().startsWith('mezzoclef.')) systemProperty(k.toString(), v.toString())
+            }
+        }
+    }
+}
+
+sourceSets {
+    main {
+        java.srcDirs = ['../../common/src/main/java', '../mc-1.20.1/src/main/java', 'src/main/java']
+        resources.srcDirs = ['../../common/src/main/resources', 'src/main/resources']
+    }
+}
+
+dependencies {
+    // Fabric Loader and NeoForge both bundle MixinExtras; Forge does not, so this target has to
+    // carry it. The shared headless mixin uses @WrapWithCondition deliberately (it coexists with
+    // other mods touching the same call sites, where @Redirect would not), so dropping it would
+    // mean forking that mixin. jarJar puts it inside the produced jar so it also works outside
+    // the dev run.
+    compileOnly 'io.github.llamalad7:mixinextras-common:0.5.3'
+    annotationProcessor 'io.github.llamalad7:mixinextras-common:0.5.3'
+    implementation jarJar('io.github.llamalad7:mixinextras-forge:0.5.3')
+}
+
+repositories {
+    mavenCentral()
+    maven { name = 'NeoForged'; url = 'https://maven.neoforged.net/releases' }
+    maven { name = 'MinecraftForge'; url = 'https://maven.minecraftforge.net/' }
+}
+
+java { toolchain { languageVersion = JavaLanguageVersion.of(javaMajor) } }
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = javaMajor
+}
+
+// Forge 1.20.1 has no [[mixins]] key in mods.toml — that is a NeoForge feature; the string does
+// not even appear in fmlloader 47.x. Mixin configs are registered the classic way, through the
+// MixinConfigs manifest attribute. The copy in src/main/resources covers the exploded dev run,
+// and this covers the built jar (excluded from the copy so the Jar task owns the real manifest).
+jar {
+    manifest {
+        attributes 'MixinConfigs': 'mezzoclef.mixins.json'
+    }
+    exclude 'META-INF/MANIFEST.MF'
+}
+
+processResources {
+    inputs.property 'version', project.version
+    inputs.property 'minecraft_version', mcVersion
+    filesMatching('META-INF/mods.toml') {
+        expand version: project.version, minecraft_version: mcVersion
+    }
+}
+
+// FML reads earlyWindowControl from config/fml.toml, which it generates on first run. Seed the
+// file (or flip the flag if it already exists) before the client starts, so the early window is
+// never attempted on a headless host.
+tasks.named('runClient') {
+    doFirst {
+        def cfg = file("${projectDir}/run/config/fml.toml")
+        cfg.parentFile.mkdirs()
+        def text = cfg.exists() ? cfg.text : ""
+        if (text =~ /(?m)^earlyWindowControl\s*=/) {
+            text = text.replaceAll(/(?m)^earlyWindowControl\s*=.*$/, 'earlyWindowControl = false')
+        } else {
+            text += (text.endsWith("\n") || text.isEmpty() ? "" : "\n") + "earlyWindowControl = false\n"
+        }
+        cfg.text = text
+    }
+}

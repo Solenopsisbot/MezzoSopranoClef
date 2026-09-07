@@ -255,8 +255,22 @@ class ClefClient:
     def schema(self) -> Dict[str, Any]:
         return self.call("schema")
 
-    def connect_server(self, host: str, port: int = 25565) -> Dict[str, Any]:
-        return self.call("connect", host=host, port=port)
+    def connect_server(self, host: str, port: int = 25565, version: Optional[str] = None) -> Dict[str, Any]:
+        """Join a server. `version` picks the protocol ViaFabricPlus speaks: "auto" (ping and match,
+        the server default), "native", or a release such as "1.12.2"; None uses the bot's config."""
+        args: Dict[str, Any] = {"host": host, "port": port}
+        if version is not None:
+            args["version"] = version
+        return self.call("connect", **args)
+
+    def protocol_info(self) -> Dict[str, Any]:
+        """ViaFabricPlus state: native version, current target, and every joinable server release.
+
+        Named ``protocol_info`` rather than ``protocol`` because ``self.protocol`` already holds the
+        control-plane protocol version from the welcome frame; a method of the same name would be
+        shadowed by that attribute and raise ``TypeError: 'int' object is not callable``.
+        """
+        return self.call("protocol")
 
     def disconnect(self) -> Dict[str, Any]:
         return self.call("disconnect")

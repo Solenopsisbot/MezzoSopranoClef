@@ -4,19 +4,20 @@ import com.google.gson.JsonObject;
 import dev.mezzo.clef.MezzoClef;
 import dev.mezzo.clef.api.ApiException;
 import dev.mezzo.clef.api.ErrorCode;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.network.ClientPlayerEntity;
-import net.minecraft.entity.Entity;
-import net.minecraft.entity.LivingEntity;
-import net.minecraft.entity.boss.dragon.EnderDragonEntity;
-import net.minecraft.entity.boss.dragon.EnderDragonPart;
-import net.minecraft.item.BowItem;
-import net.minecraft.item.ItemStack;
-import net.minecraft.item.Items;
-import net.minecraft.network.packet.c2s.play.PlayerMoveC2SPacket;
-import net.minecraft.util.hit.EntityHitResult;
-import net.minecraft.util.math.MathHelper;
-import net.minecraft.util.math.Vec3d;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.boss.enderdragon.EnderDragon;
+import net.minecraft.world.entity.boss.enderdragon.EnderDragonPart;
+import net.minecraft.world.item.BowItem;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import net.minecraft.network.protocol.game.ServerboundMovePlayerPacket;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.EntityHitResult;
+import net.minecraft.util.Mth;
+import net.minecraft.world.phys.Vec3;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -54,7 +55,7 @@ import java.util.concurrent.CompletableFuture;
 public final class CombatController {
 
     /**
-     * Ticks between a release and the next draw. {@code MinecraftClient} arms a 4-tick
+     * Ticks between a release and the next draw. {@code Minecraft} arms a 4-tick
      * {@code itemUseCooldown} whenever a use begins, and the server needs a moment to consume the
      * arrow, so anything shorter just stalls in {@code DRAW} anyway.
      */
@@ -85,7 +86,7 @@ public final class CombatController {
     /** Iterations of "where will it be when the arrow lands" vs "how long will the arrow take". */
     private static final int LEAD_ITERATIONS = 3;
 
-    /** Arrows spawn at the shooter's eye minus this, per {@code PersistentProjectileEntity}. */
+    /** Arrows spawn at the shooter's eye minus this, per {@code AbstractArrow}. */
     private static final double ARROW_SPAWN_EYE_OFFSET = 0.1;
 
     /**
@@ -200,10 +201,10 @@ public final class CombatController {
      * @throws ApiException if there is no such entity, it is out of range, or there is no bow and
      *                      arrows to shoot it with
      */
-    public CompletableFuture<Result> startShoot(MinecraftClient mc, ShootRequest request) {
-        ClientPlayerEntity player = requirePlayer(mc);
+    public CompletableFuture<Result> startShoot(Minecraft mc, ShootRequest request) {
+        LocalPlayer player = requirePlayer(mc);
         Entity target = requireTarget(mc, request.entityId());
-        double distance = Math.sqrt(target.squaredDistanceTo(player));
+        double distance = Math.sqrt(target.distanceToSqr(player));
         if (distance > request.maxRange()) {
             throw ApiException.notFound("entity " + request.entityId() + " is " + Math.round(distance)
                     + " blocks away, beyond maxRange " + request.maxRange());
@@ -211,14 +212,14 @@ public final class CombatController {
 
         // Get a bow in hand before promising anything. An already-held bow may be enchanted, so
         // prefer it over swapping in whatever else the inventory has.
-        if (!(player.getMainHandStack().getItem() instanceof BowItem)) {
+        if (!(player.getMainHandItem().getItem() instanceof BowItem)) {
             if (Hotbar.count(player.getInventory(), Items.BOW) == 0) {
                 throw new ApiException(ErrorCode.MISSING_ITEM, "no bow in inventory");
             }
             Hotbar.select(mc, Items.BOW, null);
         }
-        ItemStack bow = player.getMainHandStack();
-        if (player.getProjectileType(bow).isEmpty()) {
+        ItemStack bow = player.getMainHandItem();
+        if (player.getProjectile(bow).isEmpty()) {
             throw new ApiException(ErrorCode.MISSING_ITEM, "no arrows for the bow");
         }
 
@@ -232,13 +233,13 @@ public final class CombatController {
      * @return a future completed exactly once, when the job ends
      * @throws ApiException if there is no such entity
      */
-    public CompletableFuture<Result> startMelee(MinecraftClient mc, MeleeRequest request) {
+    public CompletableFuture<Result> startMelee(Minecraft mc, MeleeRequest request) {
         requirePlayer(mc);
         Entity target = requireTarget(mc, request.entityId());
         return begin(mc, new MeleeJob(target.getId(), request), target);
     }
 
-    private CompletableFuture<Result> begin(MinecraftClient mc, Job next, Entity target) {
+    private CompletableFuture<Result> begin(Minecraft mc, Job next, Entity target) {
         finish(mc, "replaced", "superseded by a new combat request");
         next.lastHealth = healthOf(target);
         job = next;
@@ -255,16 +256,16 @@ public final class CombatController {
      * @return true if something was actually stopped
      */
     public boolean cancel(String detail) {
-        return finish(MinecraftClient.getInstance(), "cancelled", detail);
+        return finish(Minecraft.getInstance(), "cancelled", detail);
     }
 
     // ---- the loop -------------------------------------------------------------------
 
     /** Drives the running job. Called once per client tick. */
-    public void tick(MinecraftClient mc) {
+    public void tick(Minecraft mc) {
         Job current = job;
         if (current == null) return;
-        if (mc.player == null || mc.world == null || mc.interactionManager == null) {
+        if (mc.player == null || mc.level == null || mc.gameMode == null) {
             finish(mc, "gone", "left the world mid-fight");
             return;
         }
@@ -295,7 +296,7 @@ public final class CombatController {
     }
 
     /** Completes the in-flight job, if any, exactly once. */
-    private boolean finish(MinecraftClient mc, String stopped, String detail) {
+    private boolean finish(Minecraft mc, String stopped, String detail) {
         Job current = job;
         if (current == null) return false;
         job = null;
@@ -349,10 +350,10 @@ public final class CombatController {
         abstract int budgetTicks();
 
         /** @return true when the job is finished; set {@link #stopped} first. */
-        abstract boolean tick(MinecraftClient mc, Entity target);
+        abstract boolean tick(Minecraft mc, Entity target);
 
         /** Hands the body's input state back. */
-        void release(MinecraftClient mc) {}
+        void release(Minecraft mc) {}
 
         /**
          * Counts health the target lost. Any source counts — we cannot see damage attribution from
@@ -405,8 +406,8 @@ public final class CombatController {
         }
 
         @Override
-        boolean tick(MinecraftClient mc, Entity target) {
-            ClientPlayerEntity player = mc.player;
+        boolean tick(Minecraft mc, Entity target) {
+            LocalPlayer player = mc.player;
             phaseTicks++;
             switch (phase) {
                 case DRAW -> {
@@ -426,8 +427,8 @@ public final class CombatController {
             return false;
         }
 
-        private boolean draw(MinecraftClient mc, ClientPlayerEntity player, Entity target) {
-            double distance = Math.sqrt(target.squaredDistanceTo(player));
+        private boolean draw(Minecraft mc, LocalPlayer player, Entity target) {
+            double distance = Math.sqrt(target.distanceToSqr(player));
             if (distance > request.maxRange()) {
                 stopped = "range";
                 detail = "the target moved beyond maxRange " + request.maxRange();
@@ -438,26 +439,26 @@ public final class CombatController {
                 detail = "the client has no options/key bindings yet";
                 return true;
             }
-            ItemStack bow = player.getMainHandStack();
+            ItemStack bow = player.getMainHandItem();
             if (!(bow.getItem() instanceof BowItem)) {
                 stopped = "blocked";
                 detail = "the bow left the main hand";
                 return true;
             }
-            if (player.getProjectileType(bow).isEmpty()) {
+            if (player.getProjectile(bow).isEmpty()) {
                 stopped = "out_of_ammo";
                 detail = "fired " + fired + " before running out of arrows";
                 return true;
             }
 
-            mc.options.useKey.setPressed(true);
-            int drawn = player.getItemUseTime();
+            mc.options.keyUse.setDown(true);
+            int drawn = player.getTicksUsingItem();
             if (drawn <= 0 && phaseTicks > DRAW_START_SLACK_TICKS) {
-                // The use never started. Almost always an open screen: MinecraftClient skips the
+                // The use never started. Almost always an open screen: Minecraft skips the
                 // whole input path while one is up, so the key press goes nowhere.
                 stopped = "blocked";
-                detail = mc.currentScreen != null
-                        ? "the draw never started — a screen is open (" + mc.currentScreen.getClass().getSimpleName() + ")"
+                detail = mc.gui.screen() != null
+                        ? "the draw never started — a screen is open (" + mc.gui.screen().getClass().getSimpleName() + ")"
                         : "the draw never started";
                 return true;
             }
@@ -473,12 +474,12 @@ public final class CombatController {
                 return false;
             }
             point(mc, player, shot.aimPoint(), (float) -shot.elevationDegrees(), true);
-            mc.options.useKey.setPressed(false);
-            mc.interactionManager.stopUsingItem(player);
+            mc.options.keyUse.setDown(false);
+            mc.gameMode.releaseUsingItem(player);
             fired++;
 
             if (fired >= request.shots()) {
-                settleTicks = MathHelper.clamp((int) Math.ceil(shot.flightTicks()) + SETTLE_MARGIN_TICKS,
+                settleTicks = Mth.clamp((int) Math.ceil(shot.flightTicks()) + SETTLE_MARGIN_TICKS,
                         SETTLE_MARGIN_TICKS, MAX_SETTLE_TICKS);
                 enter(Phase.SETTLE);
             } else {
@@ -488,7 +489,7 @@ public final class CombatController {
         }
 
         /** Keeps the head on the target between decisions, without committing to a firing solution. */
-        private void aimIdly(MinecraftClient mc, ClientPlayerEntity player, Entity target) {
+        private void aimIdly(Minecraft mc, LocalPlayer player, Entity target) {
             Solution shot = solve(mc, player, target, Ballistics.BOW_MAX_SPEED);
             if (shot != null) {
                 point(mc, player, shot.aimPoint(), (float) -shot.elevationDegrees(), false);
@@ -503,10 +504,10 @@ public final class CombatController {
         }
 
         @Override
-        void release(MinecraftClient mc) {
-            if (mc.options != null) mc.options.useKey.setPressed(false);
-            if (mc.player != null && mc.interactionManager != null && mc.player.isUsingItem()) {
-                mc.interactionManager.stopUsingItem(mc.player);
+        void release(Minecraft mc) {
+            if (mc.options != null) mc.options.keyUse.setDown(false);
+            if (mc.player != null && mc.gameMode != null && mc.player.isUsingItem()) {
+                mc.gameMode.releaseUsingItem(mc.player);
             }
         }
 
@@ -515,19 +516,19 @@ public final class CombatController {
          * needs the flight time, which needs the solution. Two or three passes converge: the first
          * gives a flight time good to a few ticks, the second a lead good to a fraction of a block.
          */
-        private Solution solve(MinecraftClient mc, ClientPlayerEntity player, Entity target, double speed) {
-            Vec3d origin = new Vec3d(player.getX(), player.getEyeY() - ARROW_SPAWN_EYE_OFFSET, player.getZ());
-            Vec3d here = aimPointOf(player, target);
-            Vec3d motion = request.lead() ? EntityMotion.of(target) : Vec3d.ZERO;
+        private Solution solve(Minecraft mc, LocalPlayer player, Entity target, double speed) {
+            Vec3 origin = eyePosition(player).subtract(0, ARROW_SPAWN_EYE_OFFSET, 0);
+            Vec3 here = aimPointOf(player, target);
+            Vec3 motion = request.lead() ? EntityMotion.of(target) : Vec3.ZERO;
             // The client's view of the target trails the server by about half the round trip, and
             // the arrow is spawned server-side, so lead by that much on top of the flight time.
             double offsetTicks = 1 + latencyTicks(mc);
 
             Ballistics.Aim aim = solveTo(origin, here, speed);
             if (aim == null) return null;
-            Vec3d aimPoint = here;
-            for (int i = 1; i < LEAD_ITERATIONS && motion.lengthSquared() > 0; i++) {
-                Vec3d candidate = here.add(motion.multiply(aim.flightTicks() + offsetTicks));
+            Vec3 aimPoint = here;
+            for (int i = 1; i < LEAD_ITERATIONS && motion.lengthSqr() > 0; i++) {
+                Vec3 candidate = here.add(motion.scale(aim.flightTicks() + offsetTicks));
                 Ballistics.Aim next = solveTo(origin, candidate, speed);
                 if (next == null) break;           // the lead ran out of range; keep the last good one
                 aimPoint = candidate;
@@ -536,14 +537,14 @@ public final class CombatController {
             return new Solution(aimPoint, aim.elevationDegrees(), aim.flightTicks());
         }
 
-        private Ballistics.Aim solveTo(Vec3d origin, Vec3d point, double speed) {
+        private Ballistics.Aim solveTo(Vec3 origin, Vec3 point, double speed) {
             double horizontal = Math.hypot(point.x - origin.x, point.z - origin.z);
             return Ballistics.solve(horizontal, point.y - origin.y, speed);
         }
     }
 
     /** Where to point, and what to expect. */
-    private record Solution(Vec3d aimPoint, double elevationDegrees, double flightTicks) {}
+    private record Solution(Vec3 aimPoint, double elevationDegrees, double flightTicks) {}
 
     /**
      * Swings on the attack-cooldown cadence while the target is in reach.
@@ -577,8 +578,8 @@ public final class CombatController {
         }
 
         @Override
-        boolean tick(MinecraftClient mc, Entity target) {
-            ClientPlayerEntity player = mc.player;
+        boolean tick(Minecraft mc, Entity target) {
+            LocalPlayer player = mc.player;
             if (request.stopBelowHealth() != null && player.getHealth() < request.stopBelowHealth()) {
                 stopped = "health";
                 detail = "own health fell to " + player.getHealth();
@@ -591,8 +592,8 @@ public final class CombatController {
 
             Entity hitbox = chooseHitbox(mc, player, target, request.reach());
             lookAt(mc, player, hitbox.getBoundingBox().getCenter(), false);
-            double distance = Math.sqrt(hitbox.getBoundingBox().squaredMagnitude(player.getEyePos()));
-            if (distance <= request.reach() && player.getAttackCooldownProgress(0.0f) >= 1.0f) {
+            double distance = Math.sqrt(squaredDistanceToBox(eyePosition(player), hitbox.getBoundingBox()));
+            if (distance <= request.reach() && player.getAttackStrengthScale(0.0f) >= 1.0f) {
                 actions.attackEntity(mc, hitbox);
                 swings++;
             }
@@ -606,27 +607,31 @@ public final class CombatController {
      * Finds an entity by id, including ender dragon parts.
      *
      * <p>Parts are not in the client's entity lookup — the dragon hands them ids derived from its
-     * own ({@code EnderDragonEntity.onSpawnPacket} assigns {@code dragonId + i + 1}) and keeps them
+     * own ({@code EnderDragon.recreateFromPacket} assigns {@code dragonId + i + 1}) and keeps them
      * to itself — so {@code getEntityById} alone reports a part id as gone.</p>
      */
-    public static Entity findEntity(MinecraftClient mc, int id) {
-        Entity direct = mc.world.getEntityById(id);
+    public static Entity findEntity(Minecraft mc, int id) {
+        Entity direct = mc.level.getEntity(id);
         if (direct != null) return direct;
-        for (EnderDragonPart part : mc.world.getEnderDragonParts()) {
-            if (part.getId() == id) return part;
+        // Iterated as Object on purpose: vanilla types this collection EnderDragonPart, NeoForge
+        // widens it to its own PartEntity<?> so other mods can have multipart entities too. Both
+        // are Entity, and this tree is compiled by both loaders, so the element type is the one
+        // thing we cannot name here.
+        for (Object raw : mc.level.dragonParts()) {
+            if (raw instanceof Entity part && part.getId() == id) return part;
         }
         return null;
     }
 
     /** The whole entity behind an id: a dragon part resolves to the dragon that owns it. */
-    private static Entity requireTarget(MinecraftClient mc, int id) {
+    private static Entity requireTarget(Minecraft mc, int id) {
         Entity found = findEntity(mc, id);
         if (found == null) throw ApiException.notFound("no entity with id " + id);
-        return found instanceof EnderDragonPart part ? part.owner : found;
+        return found instanceof EnderDragonPart part ? part.parentMob : found;
     }
 
-    private static ClientPlayerEntity requirePlayer(MinecraftClient mc) {
-        if (mc.player == null || mc.world == null || mc.interactionManager == null) {
+    private static LocalPlayer requirePlayer(Minecraft mc) {
+        if (mc.player == null || mc.level == null || mc.gameMode == null) {
             throw ApiException.notInWorld();
         }
         return mc.player;
@@ -634,9 +639,9 @@ public final class CombatController {
 
     /** The damageable hitboxes an entity presents: its parts if it has any, else itself. */
     private static List<Entity> hitboxesOf(Entity target) {
-        if (target instanceof EnderDragonEntity dragon) {
-            List<Entity> parts = new ArrayList<>(dragon.getBodyParts().length);
-            for (EnderDragonPart part : dragon.getBodyParts()) parts.add(part);
+        if (target instanceof EnderDragon dragon) {
+            List<Entity> parts = new ArrayList<>(dragon.getSubEntities().length);
+            for (EnderDragonPart part : dragon.getSubEntities()) parts.add(part);
             return parts;
         }
         return List.of(target);
@@ -646,18 +651,18 @@ public final class CombatController {
      * Which hitbox to swing at: what the crosshair is already on, else the closest one in reach,
      * else the closest one at all (so we turn towards it and wait for it to come to us).
      */
-    private static Entity chooseHitbox(MinecraftClient mc, ClientPlayerEntity player, Entity target, double reach) {
+    private static Entity chooseHitbox(Minecraft mc, LocalPlayer player, Entity target, double reach) {
         List<Entity> candidates = hitboxesOf(target);
         if (candidates.size() == 1) return candidates.get(0);
 
-        if (mc.crosshairTarget instanceof EntityHitResult hit && candidates.contains(hit.getEntity())) {
+        if (mc.hitResult instanceof EntityHitResult hit && candidates.contains(hit.getEntity())) {
             return hit.getEntity();
         }
-        Vec3d eye = player.getEyePos();
+        Vec3 eye = eyePosition(player);
         Entity best = candidates.get(0);
         double bestDistance = Double.MAX_VALUE;
         for (Entity candidate : candidates) {
-            double distance = candidate.getBoundingBox().squaredMagnitude(eye);
+            double distance = squaredDistanceToBox(eye, candidate.getBoundingBox());
             if (distance < bestDistance) {
                 bestDistance = distance;
                 best = candidate;
@@ -667,14 +672,14 @@ public final class CombatController {
     }
 
     /** Where to put an arrow: the nearest part of a multi-part target, else the middle of it. */
-    private static Vec3d aimPointOf(ClientPlayerEntity player, Entity target) {
+    private static Vec3 aimPointOf(LocalPlayer player, Entity target) {
         List<Entity> candidates = hitboxesOf(target);
         if (candidates.size() == 1) return target.getBoundingBox().getCenter();
-        Vec3d eye = player.getEyePos();
-        Vec3d best = target.getBoundingBox().getCenter();
+        Vec3 eye = eyePosition(player);
+        Vec3 best = target.getBoundingBox().getCenter();
         double bestDistance = Double.MAX_VALUE;
         for (Entity candidate : candidates) {
-            double distance = candidate.getBoundingBox().squaredMagnitude(eye);
+            double distance = squaredDistanceToBox(eye, candidate.getBoundingBox());
             if (distance < bestDistance) {
                 bestDistance = distance;
                 best = candidate.getBoundingBox().getCenter();
@@ -685,15 +690,15 @@ public final class CombatController {
 
     /** Health of an entity, reading through a dragon part to the dragon. NaN if it has none. */
     private static float healthOf(Entity entity) {
-        if (entity instanceof EnderDragonPart part) return part.owner.getHealth();
+        if (entity instanceof EnderDragonPart part) return part.parentMob.getHealth();
         return entity instanceof LivingEntity living ? living.getHealth() : Float.NaN;
     }
 
     // ---- aiming ---------------------------------------------------------------------
 
     /** Points the head straight at a point (no ballistic arc) — melee, and the no-solution case. */
-    private static void lookAt(MinecraftClient mc, ClientPlayerEntity player, Vec3d point, boolean sendNow) {
-        Vec3d eye = player.getEyePos();
+    private static void lookAt(Minecraft mc, LocalPlayer player, Vec3 point, boolean sendNow) {
+        Vec3 eye = eyePosition(player);
         double dy = point.y - eye.y;
         double horizontal = Math.hypot(point.x - eye.x, point.z - eye.z);
         point(mc, player, point, (float) -Math.toDegrees(Math.atan2(dy, horizontal)), sendNow);
@@ -707,27 +712,53 @@ public final class CombatController {
      *                packet carries no rotation, so the server would fire along the previous tick's
      *                aim — which is exactly the error this whole class exists to remove
      */
-    private static void point(MinecraftClient mc, ClientPlayerEntity player, Vec3d point,
+    private static void point(Minecraft mc, LocalPlayer player, Vec3 point,
                               float pitch, boolean sendNow) {
-        Vec3d eye = player.getEyePos();
-        float yaw = MathHelper.wrapDegrees(
+        Vec3 eye = eyePosition(player);
+        float yaw = Mth.wrapDegrees(
                 (float) (Math.toDegrees(Math.atan2(point.z - eye.z, point.x - eye.x)) - 90.0));
-        float clamped = MathHelper.clamp(pitch, -90.0f, 90.0f);
-        player.setYaw(yaw);
-        player.setHeadYaw(yaw);
-        player.setBodyYaw(yaw);
-        player.setPitch(clamped);
-        if (sendNow && mc.getNetworkHandler() != null) {
-            mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(
-                    yaw, clamped, player.isOnGround(), player.horizontalCollision));
+        float clamped = Mth.clamp(pitch, -90.0f, 90.0f);
+        player.setYRot(yaw);
+        player.setYHeadRot(yaw);
+        player.setYBodyRot(yaw);
+        player.setXRot(clamped);
+        if (sendNow && mc.getConnection() != null) {
+            mc.getConnection().send(new ServerboundMovePlayerPacket.Rot(
+                    yaw, clamped, player.onGround(), player.horizontalCollision));
         }
     }
 
+    /**
+     * Squared distance from a point to the nearest face of a box — zero inside it.
+     *
+     * <p>Written out rather than calling {@code AABB.distanceToSqr(Vec3)}, which does not exist on
+     * the older releases in the matrix. The bounds themselves are public on every one, and this is
+     * the same arithmetic vanilla does.</p>
+     */
+    private static double squaredDistanceToBox(Vec3 point, AABB box) {
+        double dx = Math.max(Math.max(box.minX - point.x, point.x - box.maxX), 0.0);
+        double dy = Math.max(Math.max(box.minY - point.y, point.y - box.maxY), 0.0);
+        double dz = Math.max(Math.max(box.minZ - point.z, point.z - box.maxZ), 0.0);
+        return dx * dx + dy * dy + dz * dz;
+    }
+
+    /**
+     * Eye position, the long way round.
+     *
+     * <p>{@code getEyePosition()} does not exist before 1.17 and {@code getX()}/{@code getEyeY()}
+     * are absent further back still, but {@code position()} and {@code getEyeHeight()} are on
+     * {@code Entity} across the whole matrix — and their sum is what {@code getEyePosition()}
+     * returns anyway. One expression, every release.</p>
+     */
+    private static Vec3 eyePosition(Entity entity) {
+        return entity.position().add(0.0, entity.getEyeHeight(), 0.0);
+    }
+
     /** One-way network delay in ticks, from the tab list's ping. Zero when it isn't known yet. */
-    private static int latencyTicks(MinecraftClient mc) {
-        if (mc.getNetworkHandler() == null || mc.player == null) return 0;
-        var entry = mc.getNetworkHandler().getPlayerListEntry(mc.player.getUuid());
+    private static int latencyTicks(Minecraft mc) {
+        if (mc.getConnection() == null || mc.player == null) return 0;
+        var entry = mc.getConnection().getPlayerInfo(mc.player.getUUID());
         if (entry == null) return 0;
-        return MathHelper.clamp(entry.getLatency() / 2 / 50, 0, MAX_LATENCY_LEAD_TICKS);
+        return Mth.clamp(entry.getLatency() / 2 / 50, 0, MAX_LATENCY_LEAD_TICKS);
     }
 }
