@@ -249,8 +249,20 @@ def main():
     if version_key(native) >= version_key("1.20.1"):
         pos = st["player"]
         bx, by, bz = int(pos["x"]) + 2, int(pos["y"]) - 1, int(pos["z"])
-        call(s, "chat", message=f"/setblock {bx} {by} {bz} minecraft:stone")
-        wait_for_event(s, "blockUpdate", lambda d: True, timeout=30)
+        # Retry with a different block each time. A client starved of CPU (a full matrix run has a
+        # server, a game and Gradle competing) can be slow enough to miss a 30s window, and reusing
+        # the same block would make the retry a no-op the server never broadcasts.
+        seen = None
+        for block in ("minecraft:stone", "minecraft:dirt", "minecraft:cobblestone"):
+            call(s, "chat", message=f"/setblock {bx} {by} {bz} {block}")
+            try:
+                seen = wait_for_event(s, "blockUpdate", lambda d: True, timeout=20)
+                break
+            except RuntimeError:
+                continue
+        assert seen is not None, (
+            f"no blockUpdate event after three setblock attempts — the packet mixin is not wired "
+            f"on {native} (subscribe succeeds either way, so this is the only thing that proves it)")
         print(f"[probe] blockUpdate event OK (packet mixin is wired on {native})")
     else:
         print(f"[probe] blockUpdate check skipped: no packet mixin on {native} (needs 1.20.1+)")
