@@ -52,6 +52,7 @@ A tour of the parts that aren't obvious from the schema:
 | See the layout | `screenshot {mode:"topdown", radius:64}` for an orthographic map (east-right, north-up) |
 | Label a screenshot | `screenshot {annotate:true}` also returns the camera and each visible entity's screen-space box |
 | Save round-trips | `batch {commands:[{cmd,args}...]}` runs them in order and returns every result |
+| Read the sky honestly | screenshots use the real biome/time-of-day tint on 1.14.4–1.21.8; **on 1.21.11 and 26.2 the sky is a fixed daylight blue** — see below |
 | Read Baritone's own output | `baritone {command}` returns the lines it printed, and `baritone.log` streams them — otherwise they go to a chat HUD a headless bot doesn't have |
 | Know which screen you're on | `status.screen` is a stable name (`title`, `death`, `container`, …), not the obfuscated class; the raw one is in `screenClass` |
 
@@ -175,6 +176,15 @@ NeoForge target. Four of the seven needed no source changes at all.
 file spells out why): **a working Forge target**, 1.12.2, and Fabric 1.13.2 and older. A Forge 1.20.1 module is present and builds a jar, but none of its mixins apply, so it does not run — it is `jar-built` in the matrix, never counted as verified, and the jar CI uploads for it will not work. Forge is a different loader again, though it would now reuse the seam
 NeoForge proved out. 1.14.4 is the floor for a different reason: it is the first release with
 official Mojang mappings, and those are what let `common/` be shared verbatim across the matrix.
+
+**Sky colour on 1.21.11 and 26.2 is fake.** Screenshots on those two targets always draw a fixed
+daylight blue, whatever the biome, time of day or dimension — a Nether capture at midnight comes back
+the same colour as a plains noon. Every other target reads the real tint. This is not an oversight:
+those releases removed the queryable sky colour (`Biome.getSkyColor()` is gone, and
+`BiomeSpecialEffects` carries only water/foliage/grass), leaving it computed into
+`SkyRenderState.skyColor` during `LevelRenderer.render` — the pass a headless bot skips, so reading
+it would return a stale default dressed up as a real answer. If you need true sky colour, capture on
+1.21.8 or older, or drive the real renderer with a GL context.
 
 **GPU-free booting works on both loaders**, for the releases whose Blaze3D generation has a
 stub-able device: Fabric and NeoForge on 1.21.8 and 1.21.11 (plus 26.2 on Fabric). The stub is
