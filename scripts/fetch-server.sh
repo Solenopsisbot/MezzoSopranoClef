@@ -17,7 +17,22 @@ if [[ ! -f "$DIR/server.jar" ]]; then
   SURL=$(curl -fsSL "$VURL" \
     | python3 -c "import sys,json;print(json.load(sys.stdin)['downloads']['server']['url'])")
   echo "[server] downloading $SURL"
-  curl -fsSL "$SURL" -o "$DIR/server.jar.part" && mv "$DIR/server.jar.part" "$DIR/server.jar"
+  # Retry, then check what actually landed. A transient curl failure (HTTP/2 PROTOCOL_ERROR shows
+  # up often enough) used to leave no jar while the script still said "ready", so the run failed
+  # later with a baffling "Unable to access jarfile server.jar" instead of naming the download.
+  if ! curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$SURL" -o "$DIR/server.jar.part"; then
+    rm -f "$DIR/server.jar.part"
+    echo "[server] FAILED to download the $MC_VERSION server jar from $SURL" >&2
+    exit 1
+  fi
+  # A server jar is tens of MB; anything tiny is an error page or a truncated transfer.
+  SIZE=$(wc -c < "$DIR/server.jar.part" | tr -d ' ')
+  if [[ "$SIZE" -lt 1000000 ]]; then
+    rm -f "$DIR/server.jar.part"
+    echo "[server] FAILED: downloaded $MC_VERSION server jar is only ${SIZE} bytes" >&2
+    exit 1
+  fi
+  mv "$DIR/server.jar.part" "$DIR/server.jar"
 else
   echo "[server] reusing cached $DIR/server.jar"
 fi
