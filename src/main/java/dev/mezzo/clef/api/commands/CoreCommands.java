@@ -11,23 +11,23 @@ import dev.mezzo.clef.api.CommandDispatcher;
 import dev.mezzo.clef.api.ErrorCode;
 import dev.mezzo.clef.api.ScreenNames;
 import dev.mezzo.clef.bot.ServerConnector;
+import dev.mezzo.clef.version.ProtocolBridge;
 import dev.mezzo.clef.config.ClefConfig;
 import dev.mezzo.clef.headless.HeadlessController;
 import dev.mezzo.clef.nav.BaritoneNavigator;
 import dev.mezzo.clef.nav.Navigator;
 import dev.mezzo.clef.screenshot.ScreenshotService;
-import net.minecraft.client.MinecraftClient;
 import dev.mezzo.clef.bot.EventEmitter;
-import net.minecraft.client.gui.screen.TitleScreen;
-import net.minecraft.client.network.PlayerListEntry;
-import net.minecraft.client.session.Session;
-import net.minecraft.entity.EquipmentSlot;
-import net.minecraft.entity.effect.StatusEffectInstance;
-import net.minecraft.registry.Registries;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.world.LightType;
-
 import java.util.Base64;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.User;
+import net.minecraft.client.gui.screens.TitleScreen;
+import net.minecraft.client.multiplayer.PlayerInfo;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.entity.EquipmentSlot;
+import net.minecraft.world.level.LightLayer;
 
 /** Registers the built-in control-plane commands. Add your own bot behaviours here. */
 public final class CoreCommands {
@@ -108,7 +108,7 @@ public final class CoreCommands {
         });
 
         d.register("status", "bot, world and player status", ctx -> ctx.onMain(() -> {
-            MinecraftClient mc = MinecraftClient.getInstance();
+            Minecraft mc = Minecraft.getInstance();
             HeadlessController hc = HeadlessController.get();
             JsonObject o = new JsonObject();
             o.addProperty("headless", hc.isHeadless());
@@ -116,16 +116,16 @@ public final class CoreCommands {
             o.addProperty("noWindow", hc.isNoWindow());     // true = GLFW null platform (no display server)
             o.addProperty("skippedFrames", hc.skippedFrames());
             o.addProperty("controllers", ctx.server.connectionCount());
-            o.addProperty("singleplayer", mc.isInSingleplayer());
+            o.addProperty("singleplayer", mc.isLocalServer());
             // Readable and remap-proof: the shipped client is obfuscated, so the raw class name is
             // `class_424` in production. `screenClass` keeps the raw one for modded screens.
-            o.addProperty("screen", ScreenNames.of(mc.currentScreen));
-            o.addProperty("screenClass", ScreenNames.rawOf(mc.currentScreen));
-            o.addProperty("overlay", mc.getOverlay() != null ? mc.getOverlay().getClass().getSimpleName() : "none");
-            if (mc.getCurrentServerEntry() != null) {
-                o.addProperty("server", mc.getCurrentServerEntry().address);
+            o.addProperty("screen", ScreenNames.of(mc.gui.screen()));
+            o.addProperty("screenClass", ScreenNames.rawOf(mc.gui.screen()));
+            o.addProperty("overlay", mc.gui.overlay() != null ? mc.gui.overlay().getClass().getSimpleName() : "none");
+            if (mc.getCurrentServer() != null) {
+                o.addProperty("server", mc.getCurrentServer().ip);
             }
-            boolean inWorld = mc.world != null && mc.player != null;
+            boolean inWorld = mc.level != null && mc.player != null;
             o.addProperty("inWorld", inWorld);
             if (inWorld) {
                 o.add("player", playerStatus(mc));
@@ -134,15 +134,20 @@ public final class CoreCommands {
             o.addProperty("navBackend", ctx.server.services.navigator.backend());
             o.addProperty("navActive", ctx.server.services.navigator.isActive());
             o.addProperty("screenshotBackend", ctx.server.services.screenshots.backend());
+            o.add("protocol", ProtocolBridge.get().describeJson());
             return o;
         }));
 
         d.register("auth.status", "current logged-in identity", ctx -> ctx.onMain(() -> {
-            Session s = MinecraftClient.getInstance().getSession();
+            User s = Minecraft.getInstance().getUser();
             JsonObject o = new JsonObject();
-            o.addProperty("username", s.getUsername());
-            o.addProperty("uuid", String.valueOf(s.getUuidOrNull()));
-            o.addProperty("type", s.getAccountType().name());
+            o.addProperty("username", s.getName());
+            o.addProperty("uuid", String.valueOf(s.getProfileId()));
+            // Report the type of the session we actually injected. There is nothing on User to
+            // infer it from: 26.x dropped User.Type, and getProfileId() is non-null for offline
+            // sessions too (OfflineAuth derives a stable UUID), so a null check there calls every
+            // offline bot "MSA" — the default mode for the e2e scripts and the Docker image.
+            o.addProperty("type", dev.mezzo.clef.auth.AuthManager.activeAccountType());
             return o;
         }));
 
@@ -156,20 +161,37 @@ public final class CoreCommands {
             return o;
         });
 
-        d.register("connect", "join a server {host, port}", ctx -> {
+        d.register("connect", "join a server {host, port?, version?} — version: auto|native|1.12.2…", ctx -> {
             String host = ctx.requireStr("host");
             int port = ctx.i("port", 25565);
-            ctx.onMain(() -> { ServerConnector.connect(host, port); return Boolean.TRUE; });
+            String version = ctx.str("version", MezzoClef.config().connection.serverVersion);
+            // Version selection can fail (unknown release, ViaFabricPlus missing); surface that as a
+            // clean error instead of an async log line, so run it synchronously on the client thread.
+            String selected = ctx.onMain(() -> {
+                try {
+                    return ServerConnector.connect(host, port, version);
+                } catch (IllegalArgumentException | IllegalStateException e) {
+                    throw ApiException.badArgs(e.getMessage());
+                }
+            });
             JsonObject o = new JsonObject();
             o.addProperty("connecting", true);
             o.addProperty("host", host);
             o.addProperty("port", port);
+            o.addProperty("version", selected);
+            return o;
+        });
+
+        d.register("protocol", "server-version support: ViaFabricPlus state, native version, current target, all joinable releases", ctx -> {
+            ProtocolBridge bridge = ProtocolBridge.get();
+            JsonObject o = bridge.describeJson();
+            o.add("versions", bridge.supportedVersions());
             return o;
         });
 
         d.register("disconnect", "leave the current world", ctx -> ctx.onMain(() -> {
-            // 1.21.x: disconnect(Screen returnTo, boolean transferring)
-            MinecraftClient.getInstance().disconnect(new TitleScreen(), false);
+            // 26.x: disconnect(Screen returnTo, boolean transferring)
+            Minecraft.getInstance().disconnect(new TitleScreen(), false);
             JsonObject o = new JsonObject();
             o.addProperty("disconnected", true);
             return o;
@@ -178,10 +200,10 @@ public final class CoreCommands {
         d.register("chat", "send chat, or a /command if prefixed with '/' {message}", ctx -> {
             String msg = ctx.requireStr("message");
             return ctx.onMain(() -> {
-                MinecraftClient mc = MinecraftClient.getInstance();
-                if (mc.getNetworkHandler() == null) throw ApiException.notConnected();
-                if (msg.startsWith("/")) mc.getNetworkHandler().sendChatCommand(msg.substring(1));
-                else mc.getNetworkHandler().sendChatMessage(msg);
+                Minecraft mc = Minecraft.getInstance();
+                if (mc.getConnection() == null) throw ApiException.notConnected();
+                if (msg.startsWith("/")) mc.getConnection().sendCommand(msg.substring(1));
+                else mc.getConnection().sendChat(msg);
                 JsonObject o = new JsonObject();
                 o.addProperty("sent", true);
                 return o;
@@ -192,29 +214,29 @@ public final class CoreCommands {
             float yaw = ctx.has("yaw") ? ctx.f("yaw", 0) : Float.NaN;
             float pitch = ctx.has("pitch") ? ctx.f("pitch", 0) : Float.NaN;
             return ctx.onMain(() -> {
-                MinecraftClient mc = MinecraftClient.getInstance();
+                Minecraft mc = Minecraft.getInstance();
                 if (mc.player == null) throw ApiException.notInWorld();
                 if (!Float.isNaN(yaw)) {
-                    mc.player.setYaw(yaw);
-                    mc.player.setHeadYaw(yaw);
-                    mc.player.setBodyYaw(yaw);
+                    mc.player.setYRot(yaw);
+                    mc.player.setYHeadRot(yaw);
+                    mc.player.setYBodyRot(yaw);
                 }
-                if (!Float.isNaN(pitch)) mc.player.setPitch(pitch);
+                if (!Float.isNaN(pitch)) mc.player.setXRot(pitch);
                 JsonObject o = new JsonObject();
-                o.addProperty("yaw", mc.player.getYaw());
-                o.addProperty("pitch", mc.player.getPitch());
+                o.addProperty("yaw", mc.player.getYRot());
+                o.addProperty("pitch", mc.player.getXRot());
                 return o;
             });
         });
 
         d.register("players", "list tab-list players", ctx -> ctx.onMain(() -> {
-            MinecraftClient mc = MinecraftClient.getInstance();
+            Minecraft mc = Minecraft.getInstance();
             JsonArray arr = new JsonArray();
-            if (mc.getNetworkHandler() != null) {
-                for (PlayerListEntry e : mc.getNetworkHandler().getPlayerList()) {
+            if (mc.getConnection() != null) {
+                for (PlayerInfo e : mc.getConnection().getOnlinePlayers()) {
                     JsonObject p = new JsonObject();
-                    p.addProperty("name", e.getProfile().getName());
-                    p.addProperty("id", e.getProfile().getId().toString());
+                    p.addProperty("name", e.getProfile().name());
+                    p.addProperty("id", e.getProfile().id().toString());
                     p.addProperty("ping", e.getLatency());
                     arr.add(p);
                 }
@@ -408,10 +430,10 @@ public final class CoreCommands {
                     String player = ctx.requireStr("player");
                     String text = ctx.requireStr("text");
                     return ctx.onMain(() -> {
-                        MinecraftClient mc = MinecraftClient.getInstance();
-                        if (mc.getNetworkHandler() == null) throw ApiException.notConnected();
+                        Minecraft mc = Minecraft.getInstance();
+                        if (mc.getConnection() == null) throw ApiException.notConnected();
                         String verb = whisperCommand(mc);
-                        mc.getNetworkHandler().sendChatCommand(verb + " " + player + " " + text);
+                        mc.getConnection().sendCommand(verb + " " + player + " " + text);
                         JsonObject o = new JsonObject();
                         o.addProperty("sent", true);
                         o.addProperty("command", verb);
@@ -495,8 +517,8 @@ public final class CoreCommands {
      * {@code tell} and {@code w} as aliases, but plenty of servers replace the lot, so we read the
      * command tree the server sent us instead of assuming.
      */
-    private static String whisperCommand(MinecraftClient mc) {
-        var dispatcher = mc.getNetworkHandler().getCommandDispatcher();
+    private static String whisperCommand(Minecraft mc) {
+        var dispatcher = mc.getConnection().getCommands();
         for (String candidate : new String[] { "msg", "tell", "w", "whisper", "pm" }) {
             if (dispatcher.getRoot().getChild(candidate) != null) return candidate;
         }
@@ -551,59 +573,59 @@ public final class CoreCommands {
      * round-trips: what it's wearing, what's affecting it, whether it's drowning, on fire, or
      * about to take fall damage.
      */
-    private static JsonObject playerStatus(MinecraftClient mc) {
+    private static JsonObject playerStatus(Minecraft mc) {
         var player = mc.player;
         JsonObject p = new JsonObject();
         p.addProperty("x", player.getX());
         p.addProperty("y", player.getY());
         p.addProperty("z", player.getZ());
-        p.addProperty("yaw", player.getYaw());
-        p.addProperty("pitch", player.getPitch());
+        p.addProperty("yaw", player.getYRot());
+        p.addProperty("pitch", player.getXRot());
         p.addProperty("health", player.getHealth());
         p.addProperty("maxHealth", player.getMaxHealth());
         p.addProperty("absorption", player.getAbsorptionAmount());
-        p.addProperty("food", player.getHungerManager().getFoodLevel());
-        p.addProperty("saturation", player.getHungerManager().getSaturationLevel());
+        p.addProperty("food", player.getFoodData().getFoodLevel());
+        p.addProperty("saturation", player.getFoodData().getSaturationLevel());
         p.addProperty("xpLevel", player.experienceLevel);
         p.addProperty("xpProgress", player.experienceProgress);
-        p.addProperty("onGround", player.isOnGround());
+        p.addProperty("onGround", player.onGround());
         p.addProperty("usingItem", player.isUsingItem());
         p.addProperty("selectedSlot", player.getInventory().getSelectedSlot());
-        p.addProperty("dimension", mc.world.getRegistryKey().getValue().toString());
+        p.addProperty("dimension", mc.level.dimension().identifier().toString());
 
-        var held = player.getMainHandStack();
+        var held = player.getMainHandItem();
         p.addProperty("heldItem", held.isEmpty() ? "empty"
-                : Registries.ITEM.getId(held.getItem()) + " x" + held.getCount());
-        var offhand = player.getOffHandStack();
+                : BuiltInRegistries.ITEM.getKey(held.getItem()) + " x" + held.getCount());
+        var offhand = player.getOffhandItem();
         p.addProperty("offhand", offhand.isEmpty() ? "empty"
-                : Registries.ITEM.getId(offhand.getItem()).toString());
+                : BuiltInRegistries.ITEM.getKey(offhand.getItem()).toString());
 
         p.addProperty("onFire", player.isOnFire());
-        p.addProperty("inWater", player.isTouchingWater());
+        p.addProperty("inWater", player.isInWater());
         p.addProperty("inLava", player.isInLava());
         p.addProperty("sleeping", player.isSleeping());
-        p.addProperty("sneaking", player.isSneaking());
+        p.addProperty("sneaking", player.isShiftKeyDown());
         p.addProperty("sprinting", player.isSprinting());
         p.addProperty("fallDistance", player.fallDistance);
-        p.addProperty("air", player.getAir());
-        p.addProperty("armorPoints", player.getArmor());
-        if (mc.interactionManager != null) {
-            p.addProperty("gamemode", mc.interactionManager.getCurrentGameMode().asString());
+        p.addProperty("air", player.getAirSupply());
+        p.addProperty("armorPoints", player.getArmorValue());
+        if (mc.gameMode != null) {
+            p.addProperty("gamemode", mc.gameMode.getPlayerMode().getSerializedName());
         }
 
         // Armor as ids, helmet-to-boots, with "empty" for a bare slot so the array is positional.
         JsonArray armor = new JsonArray();
         for (EquipmentSlot slot : new EquipmentSlot[] {
                 EquipmentSlot.HEAD, EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET }) {
-            var stack = player.getEquippedStack(slot);
-            armor.add(stack.isEmpty() ? "empty" : Registries.ITEM.getId(stack.getItem()).toString());
+            var stack = player.getItemBySlot(slot);
+            armor.add(stack.isEmpty() ? "empty" : BuiltInRegistries.ITEM.getKey(stack.getItem()).toString());
         }
         p.add("armor", armor);
 
         JsonArray effects = new JsonArray();
-        for (StatusEffectInstance effect : player.getStatusEffects()) {
+        for (MobEffectInstance effect : player.getActiveEffects()) {
             JsonObject e = new JsonObject();
-            effect.getEffectType().getKey().ifPresent(key -> e.addProperty("id", key.getValue().toString()));
+            effect.getEffect().unwrapKey().ifPresent(key -> e.addProperty("id", key.identifier().toString()));
             e.addProperty("amplifier", effect.getAmplifier());
             e.addProperty("ticks", effect.getDuration());
             effects.add(e);
@@ -613,26 +635,26 @@ public final class CoreCommands {
     }
 
     /** Where and when the bot is: time of day, weather, biome, and the light at its feet. */
-    private static JsonObject worldStatus(MinecraftClient mc) {
-        var world = mc.world;
+    private static JsonObject worldStatus(Minecraft mc) {
+        var world = mc.level;
         JsonObject w = new JsonObject();
 
         JsonObject time = new JsonObject();
-        long timeOfDay = world.getTimeOfDay();
+        long timeOfDay = world.getDefaultClockTime();
         time.addProperty("timeOfDay", Math.floorMod(timeOfDay, 24000L));
         time.addProperty("day", timeOfDay / 24000L);
         time.addProperty("phase", EventEmitter.phaseOf(timeOfDay));
         w.add("time", time);
 
         w.addProperty("weather", world.isThundering() ? "thunder" : world.isRaining() ? "rain" : "clear");
-        w.addProperty("dimension", world.getRegistryKey().getValue().toString());
+        w.addProperty("dimension", world.dimension().identifier().toString());
 
-        BlockPos feet = mc.player.getBlockPos();
-        world.getBiome(feet).getKey().ifPresent(key -> w.addProperty("biome", key.getValue().toString()));
+        BlockPos feet = mc.player.blockPosition();
+        world.getBiome(feet).unwrapKey().ifPresent(key -> w.addProperty("biome", key.identifier().toString()));
 
         JsonObject light = new JsonObject();
-        light.addProperty("block", world.getLightLevel(LightType.BLOCK, feet));
-        light.addProperty("sky", world.getLightLevel(LightType.SKY, feet));
+        light.addProperty("block", world.getBrightness(LightLayer.BLOCK, feet));
+        light.addProperty("sky", world.getBrightness(LightLayer.SKY, feet));
         w.add("light", light);
         return w;
     }

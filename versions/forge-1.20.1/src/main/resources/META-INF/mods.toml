@@ -1,0 +1,30 @@
+modLoader = "javafml"
+loaderVersion = "[47,)"
+license = "MIT"
+
+[[mods]]
+modId = "mezzoclef"
+version = "${version}"
+displayName = "MezzoSopranoClef"
+authors = "Solenopsisbot"
+description = '''
+Headless, render-on-demand Minecraft client built for botting. Microsoft OAuth + offline auth,
+WebSocket/JSON control plane, on-demand offscreen screenshots, optional Baritone pathfinding.
+'''
+
+[[mixins]]
+config = "mezzoclef.mixins.json"
+
+[[dependencies.mezzoclef]]
+    modId = "forge"
+    mandatory = true
+    versionRange = "[47,)"
+    ordering = "NONE"
+    side = "CLIENT"
+
+[[dependencies.mezzoclef]]
+    modId = "minecraft"
+    mandatory = true
+    versionRange = "[1.20.1]"
+    ordering = "NONE"
+    side = "CLIENT"

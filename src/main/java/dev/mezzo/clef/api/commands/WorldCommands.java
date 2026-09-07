@@ -11,20 +11,19 @@ import dev.mezzo.clef.nav.WorldWalkGrid;
 import dev.mezzo.clef.world.BlockFilter;
 import dev.mezzo.clef.world.BlockScan;
 import dev.mezzo.clef.world.PaletteCodec;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.entity.Entity;
-import net.minecraft.entity.EntityType;
-import net.minecraft.registry.Registries;
-import net.minecraft.registry.Registry;
-import net.minecraft.util.Identifier;
-import net.minecraft.util.hit.BlockHitResult;
-import net.minecraft.util.hit.EntityHitResult;
-import net.minecraft.util.hit.HitResult;
-import net.minecraft.util.math.Box;
-import net.minecraft.util.math.MathHelper;
-import net.minecraft.util.math.Vec3d;
-
 import java.util.List;
+import net.minecraft.client.Minecraft;
+import net.minecraft.core.Registry;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.Identifier;
+import net.minecraft.util.Mth;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.EntityHitResult;
+import net.minecraft.world.phys.HitResult;
+import net.minecraft.world.phys.Vec3;
 
 /**
  * Bulk world queries: the commands that let an agent look around without spending a round-trip per
@@ -53,9 +52,9 @@ public final class WorldCommands {
                     }
                     boolean nearest = sort.equals("nearest");
                     return ctx.onMain(() -> {
-                        MinecraftClient mc = MinecraftClient.getInstance();
-                        if (mc.world == null || mc.player == null) throw ApiException.notInWorld();
-                        List<BlockScan.Hit> hits = BlockScan.find(mc.world, filter,
+                        Minecraft mc = Minecraft.getInstance();
+                        if (mc.level == null || mc.player == null) throw ApiException.notInWorld();
+                        List<BlockScan.Hit> hits = BlockScan.find(mc.level, filter,
                                 mc.player.getX(), mc.player.getY(), mc.player.getZ(), radius, max, nearest);
                         JsonArray arr = new JsonArray();
                         for (BlockScan.Hit hit : hits) {
@@ -90,9 +89,9 @@ public final class WorldCommands {
                                 + budget + "-block limit (queries.maxRegionVolume)");
                     }
                     return ctx.onMain(() -> {
-                        MinecraftClient mc = MinecraftClient.getInstance();
-                        if (mc.world == null) throw ApiException.notInWorld();
-                        BlockScan.Region region = BlockScan.region(mc.world, minX, minY, minZ, maxX, maxY, maxZ);
+                        Minecraft mc = Minecraft.getInstance();
+                        if (mc.level == null) throw ApiException.notInWorld();
+                        BlockScan.Region region = BlockScan.region(mc.level, minX, minY, minZ, maxX, maxY, maxZ);
 
                         JsonObject o = new JsonObject();
                         JsonArray size = new JsonArray();
@@ -126,8 +125,8 @@ public final class WorldCommands {
             double maxDistance = ctx.d("maxDistance", 4.5);
             boolean fluids = ctx.bool("fluids", false);
             return ctx.onMain(() -> {
-                MinecraftClient mc = MinecraftClient.getInstance();
-                if (mc.player == null || mc.world == null) throw ApiException.notInWorld();
+                Minecraft mc = Minecraft.getInstance();
+                if (mc.player == null || mc.level == null) throw ApiException.notInWorld();
                 return raycast(mc, maxDistance, fluids);
             });
         });
@@ -138,29 +137,29 @@ public final class WorldCommands {
             if (entityId == null && !haveXyz) throw ApiException.badArgs("give either {x,y,z} or {entityId}");
             double tx = ctx.d("x", 0), ty = ctx.d("y", 0), tz = ctx.d("z", 0);
             return ctx.onMain(() -> {
-                MinecraftClient mc = MinecraftClient.getInstance();
-                if (mc.player == null || mc.world == null) throw ApiException.notInWorld();
-                Vec3d target;
+                Minecraft mc = Minecraft.getInstance();
+                if (mc.player == null || mc.level == null) throw ApiException.notInWorld();
+                Vec3 target;
                 if (entityId != null) {
-                    Entity e = mc.world.getEntityById(entityId);
+                    Entity e = mc.level.getEntity(entityId);
                     if (e == null) throw ApiException.notFound("no entity with id " + entityId);
-                    target = e.getEyePos();
+                    target = e.getEyePosition();
                 } else {
                     // Bare block coordinates mean the block, so aim at its centre rather than a corner.
-                    target = new Vec3d(tx, ty, tz);
+                    target = new Vec3(tx, ty, tz);
                     if (isWholeNumber(tx) && isWholeNumber(ty) && isWholeNumber(tz)) {
                         target = target.add(0.5, 0.5, 0.5);
                     }
                 }
-                Vec3d eye = mc.player.getEyePos();
+                Vec3 eye = mc.player.getEyePosition();
                 double dx = target.x - eye.x, dy = target.y - eye.y, dz = target.z - eye.z;
                 double horizontal = Math.sqrt(dx * dx + dz * dz);
-                float yaw = MathHelper.wrapDegrees((float) (Math.toDegrees(Math.atan2(dz, dx)) - 90.0));
-                float pitch = MathHelper.wrapDegrees((float) -Math.toDegrees(Math.atan2(dy, horizontal)));
-                mc.player.setYaw(yaw);
-                mc.player.setHeadYaw(yaw);
-                mc.player.setBodyYaw(yaw);
-                mc.player.setPitch(pitch);
+                float yaw = Mth.wrapDegrees((float) (Math.toDegrees(Math.atan2(dz, dx)) - 90.0));
+                float pitch = Mth.wrapDegrees((float) -Math.toDegrees(Math.atan2(dy, horizontal)));
+                mc.player.setYRot(yaw);
+                mc.player.setYHeadRot(yaw);
+                mc.player.setYBodyRot(yaw);
+                mc.player.setXRot(pitch);
                 JsonObject o = new JsonObject();
                 o.addProperty("yaw", yaw);
                 o.addProperty("pitch", pitch);
@@ -180,10 +179,10 @@ public final class WorldCommands {
                     int budget = ctx.i("maxNodes", MezzoClef.config().queries.maxPathCheckNodes);
                     int maxNodes = clamp(budget, 100, MezzoClef.config().queries.maxPathCheckNodes);
                     return ctx.onMain(() -> {
-                        MinecraftClient mc = MinecraftClient.getInstance();
-                        if (mc.world == null || mc.player == null) throw ApiException.notInWorld();
-                        var grid = new WorldWalkGrid(mc.world);
-                        var start = mc.player.getBlockPos();
+                        Minecraft mc = Minecraft.getInstance();
+                        if (mc.level == null || mc.player == null) throw ApiException.notInWorld();
+                        var grid = new WorldWalkGrid(mc.level);
+                        var start = mc.player.blockPosition();
                         PathCheck.Result result = PathCheck.search(grid,
                                 start.getX(), start.getY(), start.getZ(), x, y, z, reach, maxNodes);
                         JsonObject o = new JsonObject();
@@ -210,15 +209,15 @@ public final class WorldCommands {
                     var kinds = ctx.strings("kinds");
                     boolean tags = ctx.bool("tags", false);
                     JsonObject o = new JsonObject();
-                    o.addProperty("minecraftVersion", net.minecraft.SharedConstants.getGameVersion().name());
-                    if (wants(kinds, "blocks")) o.add("blocks", ids(Registries.BLOCK));
-                    if (wants(kinds, "items")) o.add("items", ids(Registries.ITEM));
-                    if (wants(kinds, "entities")) o.add("entities", ids(Registries.ENTITY_TYPE));
+                    o.addProperty("minecraftVersion", net.minecraft.SharedConstants.getCurrentVersion().name());
+                    if (wants(kinds, "blocks")) o.add("blocks", ids(BuiltInRegistries.BLOCK));
+                    if (wants(kinds, "items")) o.add("items", ids(BuiltInRegistries.ITEM));
+                    if (wants(kinds, "entities")) o.add("entities", ids(BuiltInRegistries.ENTITY_TYPE));
                     if (tags) {
                         JsonObject allTags = new JsonObject();
-                        if (wants(kinds, "blocks")) allTags.add("blocks", tagsOf(Registries.BLOCK));
-                        if (wants(kinds, "items")) allTags.add("items", tagsOf(Registries.ITEM));
-                        if (wants(kinds, "entities")) allTags.add("entities", tagsOf(Registries.ENTITY_TYPE));
+                        if (wants(kinds, "blocks")) allTags.add("blocks", tagsOf(BuiltInRegistries.BLOCK));
+                        if (wants(kinds, "items")) allTags.add("items", tagsOf(BuiltInRegistries.ITEM));
+                        if (wants(kinds, "entities")) allTags.add("entities", tagsOf(BuiltInRegistries.ENTITY_TYPE));
                         o.add("tags", allTags);
                     }
                     return o;
@@ -233,31 +232,31 @@ public final class WorldCommands {
      * is refreshed by the render loop, which a headless bot never runs, so reading it would hand back
      * whatever was true the last time a frame was drawn — usually nothing at all.
      */
-    private static JsonObject raycast(MinecraftClient mc, double maxDistance, boolean fluids) {
-        Vec3d eye = mc.player.getEyePos();
-        Vec3d look = mc.player.getRotationVec(1.0f);
-        Vec3d end = eye.add(look.multiply(maxDistance));
+    private static JsonObject raycast(Minecraft mc, double maxDistance, boolean fluids) {
+        Vec3 eye = mc.player.getEyePosition();
+        Vec3 look = mc.player.getViewVector(1.0f);
+        Vec3 end = eye.add(look.scale(maxDistance));
 
-        HitResult block = mc.player.raycast(maxDistance, 0.0f, fluids);
+        HitResult block = mc.player.pick(maxDistance, 0.0f, fluids);
         double blockDistance = block.getType() == HitResult.Type.MISS
-                ? maxDistance : block.getPos().distanceTo(eye);
+                ? maxDistance : block.getLocation().distanceTo(eye);
 
-        Box sweep = mc.player.getBoundingBox().stretch(look.multiply(maxDistance)).expand(1.0);
-        EntityHitResult entity = net.minecraft.entity.projectile.ProjectileUtil.raycast(
+        AABB sweep = mc.player.getBoundingBox().expandTowards(look.scale(maxDistance)).inflate(1.0);
+        EntityHitResult entity = net.minecraft.world.entity.projectile.ProjectileUtil.getEntityHitResult(
                 mc.player, eye, end, sweep,
-                e -> !e.isSpectator() && e.canHit(), blockDistance * blockDistance);
+                e -> !e.isSpectator() && e.isPickable(), blockDistance * blockDistance);
 
         JsonObject o = new JsonObject();
         if (entity != null) {
             Entity hit = entity.getEntity();
             o.addProperty("kind", "entity");
             o.addProperty("entityId", hit.getId());
-            o.addProperty("type", EntityType.getId(hit.getType()).toString());
+            o.addProperty("type", EntityType.getKey(hit.getType()).toString());
             o.addProperty("name", hit.getName().getString());
-            o.addProperty("x", entity.getPos().x);
-            o.addProperty("y", entity.getPos().y);
-            o.addProperty("z", entity.getPos().z);
-            o.addProperty("distance", entity.getPos().distanceTo(eye));
+            o.addProperty("x", entity.getLocation().x);
+            o.addProperty("y", entity.getLocation().y);
+            o.addProperty("z", entity.getLocation().z);
+            o.addProperty("distance", entity.getLocation().distanceTo(eye));
             return o;
         }
         if (block instanceof BlockHitResult hit && block.getType() != HitResult.Type.MISS) {
@@ -265,9 +264,9 @@ public final class WorldCommands {
             o.addProperty("x", hit.getBlockPos().getX());
             o.addProperty("y", hit.getBlockPos().getY());
             o.addProperty("z", hit.getBlockPos().getZ());
-            o.addProperty("face", hit.getSide().asString());
-            o.addProperty("block", Registries.BLOCK.getId(
-                    mc.world.getBlockState(hit.getBlockPos()).getBlock()).toString());
+            o.addProperty("face", hit.getDirection().getSerializedName());
+            o.addProperty("block", BuiltInRegistries.BLOCK.getKey(
+                    mc.level.getBlockState(hit.getBlockPos()).getBlock()).toString());
             o.addProperty("distance", blockDistance);
             return o;
         }
@@ -281,18 +280,18 @@ public final class WorldCommands {
 
     private static JsonArray ids(Registry<?> registry) {
         JsonArray arr = new JsonArray();
-        registry.getIds().stream().map(Identifier::toString).sorted().forEach(arr::add);
+        registry.keySet().stream().map(Identifier::toString).sorted().forEach(arr::add);
         return arr;
     }
 
     /** {@code tag -> [member ids]} for every tag the server synced for this registry. */
     private static JsonObject tagsOf(Registry<?> registry) {
         JsonObject out = new JsonObject();
-        registry.streamTags().forEach(tag -> {
+        registry.getTags().forEach(tag -> {
             JsonArray members = new JsonArray();
-            tag.stream().forEach(entry -> entry.getKey()
-                    .ifPresent(key -> members.add(key.getValue().toString())));
-            out.add("#" + tag.getTag().id(), members);
+            tag.stream().forEach(entry -> entry.unwrapKey()
+                    .ifPresent(key -> members.add(key.identifier().toString())));
+            out.add("#" + tag.key().location(), members);
         });
         return out;
     }

@@ -1,23 +1,22 @@
 package dev.mezzo.clef.bot;
 
-import net.minecraft.block.BlockState;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.entity.Entity;
-import net.minecraft.util.Hand;
-import net.minecraft.util.hit.BlockHitResult;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Direction;
-import net.minecraft.util.math.Vec3d;
-
 import dev.mezzo.clef.MezzoClef;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import net.minecraft.client.Minecraft;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.Vec3;
 
 /**
  * Discrete and continuous world interactions. The continuous ones (block breaking, place
- * confirmation) are driven by {@link #tick(MinecraftClient)} each client tick; the discrete ones
+ * confirmation) are driven by {@link #tick(Minecraft)} each client tick; the discrete ones
  * are called directly from the command layer (already on the client thread via {@code onMain}).
  *
  * <h2>Why breaking and placing report back</h2>
@@ -82,27 +81,27 @@ public final class ActionManager {
      * block is already gone, or it's bedrock). Callers that don't want to wait can ignore it; the
      * {@link MineListener} fires either way.</p>
      */
-    public CompletableFuture<MineResult> startMining(MinecraftClient mc, BlockPos pos, Direction face) {
+    public CompletableFuture<MineResult> startMining(Minecraft mc, BlockPos pos, Direction face) {
         finish(false, "replaced", "superseded by a new mine request");
         CompletableFuture<MineResult> result = new CompletableFuture<>();
         minePending = result;
         this.miningPos = pos;
         this.miningTicks = 0;
 
-        if (mc.world == null || mc.player == null) {
+        if (mc.level == null || mc.player == null) {
             reportOnce(pos, false, "not_in_world", "no world or player", 0);
             return result;
         }
-        BlockState state = mc.world.getBlockState(pos);
+        BlockState state = mc.level.getBlockState(pos);
         if (state.isAir()) {                       // already gone; report success immediately
             reportOnce(pos, true, null, "already air", 0);
             return result;
         }
         // Hardness < 0 is vanilla's "indestructible" marker (bedrock, barrier, end portal frame).
         // The server would simply ignore us forever, so refuse now rather than after 10 seconds.
-        if (state.getHardness(mc.world, pos) < 0) {
+        if (state.getDestroySpeed(mc.level, pos) < 0) {
             reportOnce(pos, false, "cant_break", "unbreakable block: "
-                    + net.minecraft.registry.Registries.BLOCK.getId(state.getBlock()), 0);
+                    + net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(state.getBlock()), 0);
             return result;
         }
 
@@ -112,10 +111,10 @@ public final class ActionManager {
         return result;
     }
 
-    public void stopMining(MinecraftClient mc) {
+    public void stopMining(Minecraft mc) {
         boolean wasMining = mining;
         mining = false;
-        if (mc.interactionManager != null) mc.interactionManager.cancelBlockBreaking();
+        if (mc.gameMode != null) mc.gameMode.stopDestroyBlock();
         if (wasMining) finish(false, "cancelled", "stopMine");
     }
 
@@ -129,19 +128,19 @@ public final class ActionManager {
     }
 
     /** Drives multi-tick block breaking and pending place confirmations. */
-    public void tick(MinecraftClient mc) {
+    public void tick(Minecraft mc) {
         tickMining(mc);
         tickPlaces(mc);
     }
 
-    private void tickMining(MinecraftClient mc) {
+    private void tickMining(Minecraft mc) {
         if (!mining) return;
-        if (mc.interactionManager == null || mc.player == null || mc.world == null) {
+        if (mc.gameMode == null || mc.player == null || mc.level == null) {
             mining = false;
             finish(false, "not_in_world", "world or player went away mid-mine");
             return;
         }
-        if (mc.world.getBlockState(miningPos).isAir()) { // broken (or already gone)
+        if (mc.level.getBlockState(miningPos).isAir()) { // broken (or already gone)
             mining = false;
             finish(true, null, null);
             return;
@@ -149,18 +148,18 @@ public final class ActionManager {
         if (++miningTicks > MAX_MINING_TICKS) {
             MezzoClef.LOG.warn("Mining {} timed out after {} ticks — giving up", miningPos, MAX_MINING_TICKS);
             mining = false;
-            if (mc.interactionManager != null) mc.interactionManager.cancelBlockBreaking();
+            if (mc.gameMode != null) mc.gameMode.stopDestroyBlock();
             finish(false, "cant_break", "gave up after " + MAX_MINING_TICKS
                     + " ticks (wrong tool, out of reach, or the server refused)");
             return;
         }
         if (!miningStarted) {
-            mc.interactionManager.attackBlock(miningPos, miningFace);
+            mc.gameMode.startDestroyBlock(miningPos, miningFace);
             miningStarted = true;
         } else {
-            mc.interactionManager.updateBlockBreakingProgress(miningPos, miningFace);
+            mc.gameMode.continueDestroyBlock(miningPos, miningFace);
         }
-        mc.player.swingHand(Hand.MAIN_HAND);
+        mc.player.swing(InteractionHand.MAIN_HAND);
     }
 
     /** Emits the completion for the in-flight mine, if there is one. */
@@ -185,27 +184,27 @@ public final class ActionManager {
         }
     }
 
-    public boolean breakInstant(MinecraftClient mc, BlockPos pos) {
-        return mc.interactionManager != null && mc.interactionManager.breakBlock(pos);
+    public boolean breakInstant(Minecraft mc, BlockPos pos) {
+        return mc.gameMode != null && mc.gameMode.destroyBlock(pos);
     }
 
-    public void attackEntity(MinecraftClient mc, Entity target) {
-        mc.interactionManager.attackEntity(mc.player, target);
-        mc.player.swingHand(Hand.MAIN_HAND);
+    public void attackEntity(Minecraft mc, Entity target) {
+        mc.gameMode.attack(mc.player, target);
+        mc.player.swing(InteractionHand.MAIN_HAND);
     }
 
-    public void useItem(MinecraftClient mc, Hand hand) {
-        mc.interactionManager.interactItem(mc.player, hand);
-        mc.player.swingHand(hand);
+    public void useItem(Minecraft mc, InteractionHand hand) {
+        mc.gameMode.useItem(mc.player, hand);
+        mc.player.swing(hand);
     }
 
     /** Right-click (place/activate) against the given block face. */
-    public net.minecraft.util.ActionResult interactBlock(MinecraftClient mc, BlockPos pos, Direction face) {
-        Vec3d v = face.getVector() == null ? Vec3d.ofCenter(pos) : Vec3d.ofCenter(pos)
-                .add(face.getVector().getX() * 0.5, face.getVector().getY() * 0.5, face.getVector().getZ() * 0.5);
+    public net.minecraft.world.InteractionResult interactBlock(Minecraft mc, BlockPos pos, Direction face) {
+        Vec3 v = face.getUnitVec3i() == null ? Vec3.atCenterOf(pos) : Vec3.atCenterOf(pos)
+                .add(face.getUnitVec3i().getX() * 0.5, face.getUnitVec3i().getY() * 0.5, face.getUnitVec3i().getZ() * 0.5);
         BlockHitResult hit = new BlockHitResult(v, face, pos, false);
-        net.minecraft.util.ActionResult result = mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, hit);
-        mc.player.swingHand(Hand.MAIN_HAND);
+        net.minecraft.world.InteractionResult result = mc.gameMode.useItemOn(mc.player, InteractionHand.MAIN_HAND, hit);
+        mc.player.swing(InteractionHand.MAIN_HAND);
         return result;
     }
 
@@ -218,20 +217,20 @@ public final class ActionManager {
      *
      * @param timeoutTicks give up after this many client ticks and report {@code placed:false}
      */
-    public CompletableFuture<PlaceOutcome> confirmPlace(MinecraftClient mc, BlockPos clicked,
+    public CompletableFuture<PlaceOutcome> confirmPlace(Minecraft mc, BlockPos clicked,
                                                         Direction face, int timeoutTicks) {
         CompletableFuture<PlaceOutcome> future = new CompletableFuture<>();
-        if (mc.world == null) {
+        if (mc.level == null) {
             future.complete(new PlaceOutcome(false, null, null, 0));
             return future;
         }
-        BlockPos neighbour = clicked.offset(face);
-        pendingPlaces.add(new PendingPlace(clicked, mc.world.getBlockState(clicked),
-                neighbour, mc.world.getBlockState(neighbour), Math.max(1, timeoutTicks), future));
+        BlockPos neighbour = clicked.relative(face);
+        pendingPlaces.add(new PendingPlace(clicked, mc.level.getBlockState(clicked),
+                neighbour, mc.level.getBlockState(neighbour), Math.max(1, timeoutTicks), future));
         return future;
     }
 
-    private void tickPlaces(MinecraftClient mc) {
+    private void tickPlaces(Minecraft mc) {
         if (pendingPlaces.isEmpty()) return;
         pendingPlaces.removeIf(p -> p.poll(mc));
     }
@@ -256,22 +255,22 @@ public final class ActionManager {
         }
 
         /** @return true when this confirmation is finished and should be dropped. */
-        boolean poll(MinecraftClient mc) {
+        boolean poll(Minecraft mc) {
             if (future.isDone()) return true;
-            if (mc.world == null) {
+            if (mc.level == null) {
                 future.complete(new PlaceOutcome(false, null, null, ticks));
                 return true;
             }
-            BlockState now = mc.world.getBlockState(neighbour);
+            BlockState now = mc.level.getBlockState(neighbour);
             if (now != neighbourBefore) {
                 future.complete(new PlaceOutcome(true, neighbour,
-                        net.minecraft.registry.Registries.BLOCK.getId(now.getBlock()).toString(), ticks));
+                        net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(now.getBlock()).toString(), ticks));
                 return true;
             }
-            BlockState clickedNow = mc.world.getBlockState(clicked);
+            BlockState clickedNow = mc.level.getBlockState(clicked);
             if (clickedNow != clickedBefore) {
                 future.complete(new PlaceOutcome(true, clicked,
-                        net.minecraft.registry.Registries.BLOCK.getId(clickedNow.getBlock()).toString(), ticks));
+                        net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(clickedNow.getBlock()).toString(), ticks));
                 return true;
             }
             if (++ticks >= timeoutTicks) {

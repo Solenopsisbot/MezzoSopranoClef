@@ -1,13 +1,13 @@
 package dev.mezzo.clef.bot;
 
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.input.KeyboardInput;
-import net.minecraft.client.network.ClientPlayerEntity;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.player.KeyboardInput;
+import net.minecraft.client.player.LocalPlayer;
 
 /**
- * Holds the bot's desired movement state and swaps the player's {@link net.minecraft.client.input.Input}
+ * Holds the bot's desired movement state and swaps the player's {@link net.minecraft.client.player.ClientInput}
  * for a {@link BotInput} while active (restoring a normal {@link KeyboardInput} when released).
- * {@link #tick(MinecraftClient)} must be called every client tick on the client thread.
+ * {@link #tick(Minecraft)} must be called every client tick on the client thread.
  */
 public final class InputController {
 
@@ -32,11 +32,11 @@ public final class InputController {
         return active;
     }
 
-    public void tick(MinecraftClient mc) {
+    public void tick(Minecraft mc) {
         if (clearAtMs > 0 && System.currentTimeMillis() >= clearAtMs) {
             clear();
         }
-        ClientPlayerEntity p = mc.player;
+        LocalPlayer p = mc.player;
         if (p == null) return;
         if (active) {
             if (!(p.input instanceof BotInput)) p.input = new BotInput(this);

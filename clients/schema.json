@@ -75,7 +75,7 @@
       "name": "status",
       "summary": "bot, world and player status",
       "args": [],
-      "result": "{headless,noGl,noWindow,screen,screenClass,inWorld,player?{...,armor,effects,gamemode,air,...},world?{time,weather,biome,light},server?,nav*,screenshotBackend,...}"
+      "result": "{headless,noGl,noWindow,screen,screenClass,inWorld,player?{...,armor,effects,gamemode,air,...},world?{time,weather,biome,light},server?,nav*,screenshotBackend,protocol{available,native,target},...}"
     },
     {
       "name": "auth.status",
@@ -91,7 +91,7 @@
     },
     {
       "name": "connect",
-      "summary": "join a server {host, port}",
+      "summary": "join a server {host, port?, version?} — version: auto|native|1.12.2…",
       "args": [
         {
           "name": "host",
@@ -103,9 +103,21 @@
           "type": "int",
           "required": false,
           "default": "25565"
+        },
+        {
+          "name": "version",
+          "type": "string",
+          "required": false,
+          "default": "auto"
         }
       ],
-      "result": "{connecting,host,port}"
+      "result": "{connecting,host,port,version}"
+    },
+    {
+      "name": "protocol",
+      "summary": "server-version support: ViaFabricPlus state, native version, current target, all joinable releases",
+      "args": [],
+      "result": "{available,native,target,reason?,versions:[{name,protocol}]}"
     },
     {
       "name": "disconnect",

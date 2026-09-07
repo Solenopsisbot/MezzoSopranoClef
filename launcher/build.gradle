@@ -13,7 +13,8 @@ repositories {
 }
 
 java {
-    toolchain { languageVersion = JavaLanguageVersion.of(21) }
+    // Matches the game: Minecraft 26.x needs Java 25, and the launcher spawns the client with its own JVM.
+    toolchain { languageVersion = JavaLanguageVersion.of(25) }
 }
 
 configurations {
@@ -34,11 +35,12 @@ test {
     testLogging { events "passed", "skipped", "failed" }
 }
 
-// Stage the two jars the bot needs in its mods/ folder: our remapped mod + Fabric API.
+// Stage the two jars the bot needs in its mods/ folder: our mod + Fabric API. (26.x Minecraft is
+// unobfuscated, so the plain `jar` IS the distributable — there is no remap step any more.)
 def stageBundled = tasks.register('stageBundled', Copy) {
-    dependsOn rootProject.tasks.named('remapJar')
+    dependsOn rootProject.tasks.named('jar')
     into layout.buildDirectory.dir('bundled')
-    from(rootProject.tasks.named('remapJar').map { it.archiveFile }) { rename { 'mezzosopranoclef.jar' } }
+    from(rootProject.tasks.named('jar').map { it.archiveFile }) { rename { 'mezzosopranoclef.jar' } }
     from(configurations.bundledMod) { rename { 'fabric-api.jar' } }
 }
 
@@ -48,11 +50,15 @@ processResources {
     inputs.property 'loader', project.loader_version
     inputs.property 'fabric_api', project.fabric_api_version
     inputs.property 'mod_version', project.mod_version
+    inputs.property 'viafabricplus', project.viafabricplus_version
+    inputs.property 'with_viafabricplus', project.with_viafabricplus
     filesMatching('clef-launcher.properties') {
         expand minecraft: project.minecraft_version,
                loader: project.loader_version,
                fabric_api: project.fabric_api_version,
-               mod_version: project.mod_version
+               mod_version: project.mod_version,
+               viafabricplus: project.viafabricplus_version,
+               with_viafabricplus: project.with_viafabricplus
     }
 }
 

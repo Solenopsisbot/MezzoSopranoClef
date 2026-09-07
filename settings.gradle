@@ -1,14 +1,25 @@
 pluginManagement {
+    plugins {
+        id 'net.fabricmc.fabric-loom' version '1.17.20'
+        id 'fabric-loom' version '1.17.20'
+        id 'net.neoforged.moddev' version '2.0.146'
+        // Same plugin family, legacy-Forge flavour — so the Forge target reuses ModDevGradle
+        // rather than dragging ForgeGradle into the build.
+        id 'net.neoforged.moddev.legacyforge' version '2.0.146'
+    }
     repositories {
         maven { name = 'Fabric'; url = 'https://maven.fabricmc.net/' }
+        // ModDevGradle (the NeoForge build plugin) and NeoForge itself live here.
+        maven { name = 'NeoForged'; url = 'https://maven.neoforged.net/releases' }
         gradlePluginPortal()
         mavenCentral()
     }
 }
 
 plugins {
-    // Lets Gradle auto-provision a JDK 21 toolchain on any OS (foojay disco API).
-    // If this version errors on your Gradle, bump it or install JDK 21 manually.
+    // Lets Gradle auto-provision JDK toolchains on any OS (foojay disco API). The matrix needs
+    // several (25 for 26.x, 21 for 1.20.5+, 17 for 1.18-1.20.4, 8 for 1.12-1.16), so this earns
+    // its keep — Gradle fetches whichever a target asks for.
     id 'org.gradle.toolchains.foojay-resolver-convention' version '1.0.0'
 }
 
@@ -18,3 +29,42 @@ rootProject.name = 'MezzoSopranoClef'
 // and launches the headless bot — so end users don't need Gradle/Loom. Kept a separate module so
 // the mod itself stays zero-runtime-dependency.
 include 'launcher'
+
+// ---------------------------------------------------------------------------
+// Native per-version client builds. Each is a real mod jar for that Minecraft release, so
+// version-specific Fabric/Forge mods load alongside the bot. `common/` is shared source.
+// ---------------------------------------------------------------------------
+include 'versions:fabric-1.21.11'
+include 'versions:fabric-1.21.8'
+include 'versions:fabric-1.21.5'
+include 'versions:fabric-1.21.4'
+include 'versions:fabric-1.21.1'
+include 'versions:fabric-1.20.6'
+include 'versions:fabric-1.20.4'
+include 'versions:fabric-1.20.1'
+include 'versions:fabric-1.19.4'
+include 'versions:fabric-1.19.2'
+include 'versions:fabric-1.18.2'
+include 'versions:fabric-1.17.1'
+include 'versions:fabric-1.16.5'
+include 'versions:fabric-1.15.2'
+include 'versions:fabric-1.14.4'
+
+// ---------------------------------------------------------------------------
+// NeoForge. A different loader rather than another version: the shared code is the same, but the
+// entrypoint, event wiring and build plugin are its own. `versions/mc-1.21.8/` holds the Minecraft
+// glue that this and the Fabric 1.21.8 target both compile.
+// ---------------------------------------------------------------------------
+include 'versions:neoforge-1.21.8'
+include 'versions:neoforge-1.21.1'
+include 'versions:neoforge-1.21.11'
+include 'versions:neoforge-1.21.5'
+include 'versions:neoforge-1.21.4'
+include 'versions:neoforge-1.20.6'
+include 'versions:neoforge-1.20.4'
+
+// ---------------------------------------------------------------------------
+// MinecraftForge. The third loader; 1.20.1 is where the bulk of Forge modpacks live. Shares
+// `versions/mc-1.20.1/` with the Fabric 1.20.1 target.
+// ---------------------------------------------------------------------------
+include 'versions:forge-1.20.1'

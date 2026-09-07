@@ -1,17 +1,16 @@
 package dev.mezzo.clef.world;
 
 import dev.mezzo.clef.api.ApiException;
-import net.minecraft.block.Block;
-import net.minecraft.block.BlockState;
-import net.minecraft.registry.Registries;
-import net.minecraft.registry.RegistryKeys;
-import net.minecraft.registry.tag.TagKey;
-import net.minecraft.util.Identifier;
-
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.core.registries.Registries;
+import net.minecraft.resources.Identifier;
+import net.minecraft.tags.TagKey;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.state.BlockState;
 
 /**
  * Resolves the {@code ids} argument of {@code findBlocks} into a fast {@link BlockState} predicate.
@@ -47,7 +46,7 @@ public final class BlockFilter {
             String id = raw == null ? "" : raw.trim();
             if (id.isEmpty()) throw ApiException.badArgs("'ids' contains an empty entry");
             if (id.startsWith("#")) {
-                tags.add(TagKey.of(RegistryKeys.BLOCK, parseId(id.substring(1))));
+                tags.add(TagKey.create(Registries.BLOCK, parseId(id.substring(1))));
             } else {
                 blocks.add(resolveBlock(id));
             }
@@ -59,30 +58,30 @@ public final class BlockFilter {
     public boolean matches(BlockState state) {
         if (blocks.contains(state.getBlock())) return true;
         for (TagKey<Block> tag : tags) {
-            if (state.isIn(tag)) return true;
+            if (state.is(tag)) return true;
         }
         return false;
     }
 
     private static Identifier parseId(String id) {
-        Identifier parsed = id.indexOf(':') >= 0 ? Identifier.tryParse(id) : Identifier.tryParse("minecraft", id);
+        Identifier parsed = id.indexOf(':') >= 0 ? Identifier.tryParse(id) : Identifier.tryBuild("minecraft", id);
         if (parsed == null) throw ApiException.badArgs("not a valid identifier: '" + id + "'");
         return parsed;
     }
 
     private static Block resolveBlock(String id) {
         Identifier parsed = parseId(id);
-        Block direct = Registries.BLOCK.getOptionalValue(parsed).orElse(null);
+        Block direct = BuiltInRegistries.BLOCK.getOptional(parsed).orElse(null);
         if (direct != null) return direct;
         // Bare path that isn't vanilla: accept it if exactly one namespace provides it.
         if (id.indexOf(':') < 0) {
             Block only = null;
-            for (Identifier candidate : Registries.BLOCK.getIds()) {
+            for (Identifier candidate : BuiltInRegistries.BLOCK.keySet()) {
                 if (!candidate.getPath().equals(id)) continue;
                 if (only != null) {
                     throw ApiException.badArgs("ambiguous block '" + id + "' — qualify it with a namespace");
                 }
-                only = Registries.BLOCK.getOptionalValue(candidate).orElse(null);
+                only = BuiltInRegistries.BLOCK.getOptional(candidate).orElse(null);
             }
             if (only != null) return only;
         }

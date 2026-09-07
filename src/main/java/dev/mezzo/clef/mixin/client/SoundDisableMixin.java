@@ -1,10 +1,10 @@
 package dev.mezzo.clef.mixin.client;
 
 import dev.mezzo.clef.headless.HeadlessController;
-import net.minecraft.client.sound.SoundInstance;
-import net.minecraft.client.sound.SoundManager;
-import net.minecraft.client.sound.SoundSystem;
-import net.minecraft.client.sound.TickableSoundInstance;
+import net.minecraft.client.resources.sounds.SoundInstance;
+import net.minecraft.client.resources.sounds.TickableSoundInstance;
+import net.minecraft.client.sounds.SoundEngine;
+import net.minecraft.client.sounds.SoundManager;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -22,7 +22,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
  *
  * <p>We block all three start paths and skip the per-tick pump:
  * <ul>
- *   <li>{@code play(SoundInstance)} returns {@link SoundSystem.PlayResult#STARTED_SILENTLY} — the
+ *   <li>{@code play(SoundInstance)} returns {@link SoundEngine.PlayResult#STARTED_SILENTLY} — the
  *       honest "accepted but inaudible" result, so callers like {@code MusicTracker} treat the cue
  *       as started and don't retry every tick.</li>
  *   <li>{@code play(SoundInstance,int)} and {@code playNextTick(...)} are cancelled.</li>
@@ -42,17 +42,17 @@ public class SoundDisableMixin {
         if (hc.isMuteAudio() && hc.isDisableSound()) ci.cancel();
     }
 
-    @Inject(method = "play(Lnet/minecraft/client/sound/SoundInstance;)Lnet/minecraft/client/sound/SoundSystem$PlayResult;",
+    @Inject(method = "play(Lnet/minecraft/client/resources/sounds/SoundInstance;)Lnet/minecraft/client/sounds/SoundEngine$PlayResult;",
             at = @At("HEAD"), cancellable = true, require = 0)
-    private void clef$skipPlay(SoundInstance sound, CallbackInfoReturnable<SoundSystem.PlayResult> cir) {
+    private void clef$skipPlay(SoundInstance sound, CallbackInfoReturnable<SoundEngine.PlayResult> cir) {
         HeadlessController hc = HeadlessController.get();
         if (hc.isMuteAudio() && hc.isDisableSound()) {
             hc.noteSoundSuppressed();
-            cir.setReturnValue(SoundSystem.PlayResult.STARTED_SILENTLY);
+            cir.setReturnValue(SoundEngine.PlayResult.STARTED_SILENTLY);
         }
     }
 
-    @Inject(method = "play(Lnet/minecraft/client/sound/SoundInstance;I)V",
+    @Inject(method = "playDelayed(Lnet/minecraft/client/resources/sounds/SoundInstance;I)V",
             at = @At("HEAD"), cancellable = true, require = 0)
     private void clef$skipPlayDelayed(SoundInstance sound, int delay, CallbackInfo ci) {
         HeadlessController hc = HeadlessController.get();
@@ -62,7 +62,7 @@ public class SoundDisableMixin {
         }
     }
 
-    @Inject(method = "playNextTick(Lnet/minecraft/client/sound/TickableSoundInstance;)V",
+    @Inject(method = "queueTickingSound(Lnet/minecraft/client/resources/sounds/TickableSoundInstance;)V",
             at = @At("HEAD"), cancellable = true, require = 0)
     private void clef$skipPlayNextTick(TickableSoundInstance sound, CallbackInfo ci) {
         HeadlessController hc = HeadlessController.get();

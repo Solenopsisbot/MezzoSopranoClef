@@ -1,6 +1,6 @@
 package dev.mezzo.clef.mixin.client;
 
-import net.minecraft.client.util.Window;
+import com.mojang.blaze3d.platform.Window;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Mutable;
 import org.spongepowered.asm.mixin.gen.Accessor;
@@ -8,7 +8,7 @@ import org.spongepowered.asm.mixin.gen.Accessor;
 /**
  * Lets the screenshot service temporarily spoof the framebuffer dimensions so the world
  * projection (aspect ratio / FOV math reads these) matches the requested capture resolution,
- * then restores them. yarn fields: {@code framebufferWidth}, {@code framebufferHeight}.
+ * then restores them. Mojang fields: {@code framebufferWidth}, {@code framebufferHeight}.
  */
 @Mixin(Window.class)
 public interface WindowAccessor {

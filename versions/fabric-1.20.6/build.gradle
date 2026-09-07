@@ -1,0 +1,72 @@
+// Native Fabric build for Minecraft 1.20.6.
+//
+// A real client build for this release: it loads 1.20.6 Fabric mods, because it IS a 1.20.6 mod.
+// Mojang's official mappings are used across the whole matrix, so `common/` is shared verbatim and
+// only genuine Minecraft API changes live in this module's src/main/java.
+plugins {
+    id 'fabric-loom'
+    id 'java'
+}
+
+ext {
+    mcVersion = '1.20.6'
+    fabricApiVersion = '0.100.8+1.20.6'
+    loaderVersion = '0.19.5'
+    javaMajor = 21
+}
+
+group = rootProject.group
+version = rootProject.version
+base { archivesName = "mezzosopranoclef-fabric-${mcVersion}" }
+
+repositories {
+    mavenCentral()
+    maven { name = 'Fabric'; url = 'https://maven.fabricmc.net/' }
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${mcVersion}"
+    mappings loom.officialMojangMappings()
+    modImplementation "net.fabricmc:fabric-loader:${loaderVersion}"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:${fabricApiVersion}"
+}
+
+sourceSets {
+    main {
+        java.srcDirs = ['../../common/src/main/java', '../../fabric-common/src/main/java',
+                        '../mc-1.20.6/src/main/java', 'src/main/java']
+        resources.srcDirs = ['../../common/src/main/resources', 'src/main/resources']
+    }
+}
+
+loom {
+    runs {
+        client {
+            client()
+            configName = "Headless Bot Client ${mcVersion}"
+            if (System.getProperty('mezzoclef.headless') == null) vmArgs '-Dmezzoclef.headless=true'
+            vmArgs "-Xmx${project.findProperty('maxHeap') ?: '768m'}".toString()
+            vmArgs '-XX:+UseG1GC', '-XX:MaxGCPauseMillis=50', '-XX:+UseStringDeduplication',
+                   '-XX:G1PeriodicGCInterval=15000', '-XX:MaxMetaspaceSize=256m'
+            vmArgs "-Dmax.bg.threads=${project.findProperty('bgThreads') ?: '4'}".toString()
+            System.properties.each { k, v ->
+                if (k.toString().startsWith('mezzoclef.')) vmArgs("-D${k}=${v}".toString())
+            }
+        }
+    }
+}
+
+java { toolchain { languageVersion = JavaLanguageVersion.of(javaMajor) } }
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = javaMajor
+}
+
+processResources {
+    inputs.property 'version', project.version
+    inputs.property 'minecraft_version', mcVersion
+    inputs.property 'loader_version', loaderVersion
+    filesMatching('fabric.mod.json') {
+        expand version: project.version, minecraft_version: mcVersion, loader_version: loaderVersion
+    }
+}
