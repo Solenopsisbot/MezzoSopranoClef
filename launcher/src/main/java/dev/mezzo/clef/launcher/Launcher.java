@@ -33,8 +33,9 @@ import java.util.concurrent.atomic.AtomicInteger;
  *
  * <p>It does what {@code ./gradlew runClient} does, but as a standalone {@code java -jar}: on first
  * run it downloads the official Minecraft client + libraries + assets (from Mojang) and the Fabric
- * loader + intermediary mappings (from Fabric meta), drops the bundled mod + Fabric API into a
- * {@code mods/} folder, then spawns the real client JVM with the GPU-free / headless flags.
+ * loader (from Fabric meta), drops the bundled mod + Fabric API into a {@code mods/} folder, fetches
+ * ViaFabricPlus from Modrinth (so the bot can join servers on any version back to 1.7.2), then
+ * spawns the real client JVM with the GPU-free / headless flags.
  *
  * <p>Minecraft itself is <b>not</b> bundled (it isn't redistributable) — it is downloaded into the
  * game directory on first run and cached for subsequent runs, exactly like any launcher.
@@ -42,14 +43,18 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <p>Config: the bot reads {@code <gameDir>/config/mezzoclef.json} (written on first run). Anything
  * is overridable with {@code -Dmezzoclef.*} passed to this launcher (forwarded to the client JVM).
  * Env: {@code CLEF_GAMEDIR}, {@code CLEF_MAX_HEAP} (768m), {@code CLEF_BG_THREADS} (4),
- * {@code CLEF_SKIP_SOUNDS} (true — we mute audio, so sound assets are skipped by default).
+ * {@code CLEF_SKIP_SOUNDS} (true — we mute audio, so sound assets are skipped by default),
+ * {@code CLEF_VIAFABRICPLUS} (true — set false to skip installing the protocol translator).
  */
 public final class Launcher {
 
     private static final String VERSION_MANIFEST = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
     private static final String RESOURCES_BASE = "https://resources.download.minecraft.net/";
     private static final String FABRIC_META = "https://meta.fabricmc.net/v2/versions/loader/";
+    private static final String MODRINTH_VERSION = "https://api.modrinth.com/v2/project/viafabricplus/version/";
     private static final String DEFAULT_MAIN_CLASS = "net.fabricmc.loader.impl.launch.knot.KnotClient";
+    /** Modrinth asks API clients to identify themselves; Mojang/Fabric don't mind either way. */
+    private static final String USER_AGENT = "MezzoSopranoClef-launcher (github.com/Solenopsisbot/MezzoSopranoClef)";
 
     private static final HttpClient HTTP = HttpClient.newBuilder()
             .followRedirects(HttpClient.Redirect.NORMAL)
@@ -58,6 +63,7 @@ public final class Launcher {
 
     private final String mcVersion;
     private final String loaderVersion;
+    private final String viaFabricPlusVersion;   // null/blank = don't install it
     private final Path gameDir;
     private final Path libDir;
     private final Path assetsDir;
@@ -66,6 +72,9 @@ public final class Launcher {
     private Launcher(Properties versions) {
         this.mcVersion = versions.getProperty("minecraft");
         this.loaderVersion = versions.getProperty("loader");
+        boolean wantVia = !"false".equalsIgnoreCase(versions.getProperty("with_viafabricplus", "true"))
+                && !"false".equalsIgnoreCase(System.getenv().getOrDefault("CLEF_VIAFABRICPLUS", "true"));
+        this.viaFabricPlusVersion = wantVia ? versions.getProperty("viafabricplus") : null;
         String dir = firstNonBlank(System.getProperty("clef.gamedir"),
                 System.getProperty("mezzoclef.gamedir"),
                 System.getenv("CLEF_GAMEDIR"),
@@ -93,6 +102,7 @@ public final class Launcher {
         Files.createDirectories(gameDir.resolve("mods"));
 
         extractBundledMods();
+        installViaFabricPlus();
 
         // 1) Vanilla Minecraft (client jar + assets).
         JsonObject versionJson = resolveVersionJson();
@@ -124,6 +134,51 @@ public final class Launcher {
         copyResource("/bundled/mezzosopranoclef.jar", mods.resolve("mezzosopranoclef.jar"));
         copyResource("/bundled/fabric-api.jar", mods.resolve("fabric-api.jar"));
         log("Installed bundled mods (mezzosopranoclef + fabric-api) into " + mods);
+    }
+
+    /**
+     * Installs ViaFabricPlus into {@code mods/}. This is what turns the single newest-version client
+     * into one that can join servers on every release back to 1.7.2 (the bot picks the protocol per
+     * connection via its {@code connect} command / {@code connection.serverVersion} config).
+     *
+     * <p>Fetched at run time rather than bundled: ViaFabricPlus is GPL-3.0 and this project is MIT,
+     * so we install it alongside our jar instead of redistributing it inside it. The pinned version
+     * comes from {@code gradle.properties}; the exact file + SHA-1 are resolved from Modrinth's API
+     * and verified on download. A failure here is logged and skipped — the bot still runs, it just
+     * can only join servers on its own version.
+     */
+    private void installViaFabricPlus() {
+        Path target = gameDir.resolve("mods").resolve("viafabricplus.jar");
+        if (viaFabricPlusVersion == null || viaFabricPlusVersion.isBlank()) {
+            try {
+                if (Files.deleteIfExists(target)) log("ViaFabricPlus disabled — removed " + target);
+            } catch (IOException e) {
+                log("Could not remove " + target + ": " + e.getMessage());
+            }
+            return;
+        }
+        try {
+            JsonObject version = fetchJson(MODRINTH_VERSION + viaFabricPlusVersion);
+            JsonObject file = pickPrimaryFile(version.getAsJsonArray("files"));
+            String url = file.get("url").getAsString();
+            long size = file.get("size").getAsLong();
+            String sha1 = file.getAsJsonObject("hashes").get("sha1").getAsString();
+            download(url, target, size, sha1);
+            log("Installed ViaFabricPlus " + viaFabricPlusVersion + " (multi-version server support) into " + target);
+        } catch (Exception e) {
+            log("WARNING: could not install ViaFabricPlus " + viaFabricPlusVersion + " (" + e.getMessage()
+                    + "). The bot will only be able to join Minecraft " + mcVersion + " servers.");
+        }
+    }
+
+    /** Modrinth marks the real mod jar as primary; fall back to the first file for odd releases. */
+    static JsonObject pickPrimaryFile(JsonArray files) {
+        for (JsonElement e : files) {
+            JsonObject f = e.getAsJsonObject();
+            if (f.has("primary") && f.get("primary").getAsBoolean()) return f;
+        }
+        if (files.isEmpty()) throw new IllegalStateException("release has no files");
+        return files.get(0).getAsJsonObject();
     }
 
     private void copyResource(String resource, Path target) throws IOException {
@@ -346,7 +401,8 @@ public final class Launcher {
     }
 
     private JsonObject fetchJson(String url) throws IOException, InterruptedException {
-        HttpRequest req = HttpRequest.newBuilder(URI.create(url)).GET().timeout(Duration.ofSeconds(60)).build();
+        HttpRequest req = HttpRequest.newBuilder(URI.create(url)).GET()
+                .header("User-Agent", USER_AGENT).timeout(Duration.ofSeconds(60)).build();
         HttpResponse<String> resp = HTTP.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
         if (resp.statusCode() != 200) throw new IOException("GET " + url + " -> HTTP " + resp.statusCode());
         return JsonParser.parseString(resp.body()).getAsJsonObject();
@@ -361,7 +417,8 @@ public final class Launcher {
         IOException last = null;
         for (int attempt = 1; attempt <= 3; attempt++) {
             try {
-                HttpRequest req = HttpRequest.newBuilder(URI.create(url)).GET().timeout(Duration.ofMinutes(5)).build();
+                HttpRequest req = HttpRequest.newBuilder(URI.create(url)).GET()
+                        .header("User-Agent", USER_AGENT).timeout(Duration.ofMinutes(5)).build();
                 Path tmp = out.resolveSibling(out.getFileName() + ".part");
                 HttpResponse<Path> resp = HTTP.send(req, HttpResponse.BodyHandlers.ofFile(tmp));
                 if (resp.statusCode() != 200) throw new IOException("HTTP " + resp.statusCode() + " for " + url);
@@ -386,7 +443,7 @@ public final class Launcher {
 
     private String fetchSha1(String url) throws IOException, InterruptedException {
         HttpRequest req = HttpRequest.newBuilder(URI.create(url + ".sha1"))
-                .GET().timeout(Duration.ofSeconds(60)).build();
+                .GET().header("User-Agent", USER_AGENT).timeout(Duration.ofSeconds(60)).build();
         HttpResponse<String> resp = HTTP.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
         if (resp.statusCode() != 200) {
             throw new IOException("GET " + url + ".sha1 -> HTTP " + resp.statusCode());

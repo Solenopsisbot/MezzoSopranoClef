@@ -1,13 +1,13 @@
 package dev.mezzo.clef.bot;
 
 import dev.mezzo.clef.api.ApiException;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.entity.player.PlayerInventory;
-import net.minecraft.item.Item;
-import net.minecraft.item.ItemStack;
-import net.minecraft.screen.ScreenHandler;
-import net.minecraft.screen.slot.Slot;
-import net.minecraft.screen.slot.SlotActionType;
+import net.minecraft.client.Minecraft;
+import net.minecraft.world.entity.player.Inventory;
+import net.minecraft.world.inventory.AbstractContainerMenu;
+import net.minecraft.world.inventory.ContainerInput;
+import net.minecraft.world.inventory.Slot;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
 
 /**
  * Getting a specific item into the bot's hand — the small, fiddly step that sits in front of half
@@ -16,7 +16,7 @@ import net.minecraft.screen.slot.SlotActionType;
  * <p>Minecraft has no "hold this item" operation. You can only select one of nine hotbar slots, and
  * move stacks between slots by clicking. So this does what a player does: use it if it's already on
  * the hotbar, otherwise swap it there from the main inventory (vanilla's number-key swap, which is
- * a single {@link SlotActionType#SWAP} click) and then select it.</p>
+ * a single {@link ContainerInput#SWAP} click) and then select it.</p>
  *
  * <p>Must run on the client thread.</p>
  */
@@ -39,34 +39,34 @@ public final class Hotbar {
      *                      the currently selected slot, whose contents get swapped out — not lost)
      * @throws ApiException {@code NOT_FOUND} if the inventory has none of the item
      */
-    public static Selection select(MinecraftClient mc, Item item, Integer preferredSlot) {
-        if (mc.player == null || mc.interactionManager == null) throw ApiException.notInWorld();
+    public static Selection select(Minecraft mc, Item item, Integer preferredSlot) {
+        if (mc.player == null || mc.gameMode == null) throw ApiException.notInWorld();
         if (preferredSlot != null && (preferredSlot < 0 || preferredSlot >= HOTBAR_SIZE)) {
             throw ApiException.badArgs("slot must be 0-8");
         }
-        PlayerInventory inv = mc.player.getInventory();
+        Inventory inv = mc.player.getInventory();
 
         for (int i = 0; i < HOTBAR_SIZE; i++) {
-            if (inv.getStack(i).getItem() == item) {
+            if (inv.getItem(i).getItem() == item) {
                 inv.setSelectedSlot(i);
                 return new Selection(i, false, i);
             }
         }
 
         int source = -1;
-        for (int i = HOTBAR_SIZE; i < inv.size(); i++) {
-            if (inv.getStack(i).getItem() == item) {
+        for (int i = HOTBAR_SIZE; i < inv.getContainerSize(); i++) {
+            if (inv.getItem(i).getItem() == item) {
                 source = i;
                 break;
             }
         }
         if (source < 0) {
             throw ApiException.notFound("no '"
-                    + net.minecraft.registry.Registries.ITEM.getId(item) + "' in inventory");
+                    + net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(item) + "' in inventory");
         }
 
         int target = preferredSlot != null ? preferredSlot : firstEmptyHotbarSlot(inv);
-        ScreenHandler handler = mc.player.currentScreenHandler;
+        AbstractContainerMenu handler = mc.player.containerMenu;
         Slot sourceSlot = findSlot(handler, inv, source);
         if (sourceSlot == null) {
             // Only possible with an exotic screen handler that doesn't expose the main inventory.
@@ -74,36 +74,36 @@ public final class Hotbar {
         }
         // SWAP's "button" is the destination hotbar index — this is exactly the vanilla number-key
         // swap, so whatever was in the target slot goes back where the item came from.
-        mc.interactionManager.clickSlot(handler.syncId, sourceSlot.id, target, SlotActionType.SWAP, mc.player);
+        mc.gameMode.handleContainerInput(handler.containerId, sourceSlot.index, target, ContainerInput.SWAP, mc.player);
         inv.setSelectedSlot(target);
         return new Selection(target, true, source);
     }
 
     /** An empty hotbar slot if there is one, else the slot currently selected. */
-    private static int firstEmptyHotbarSlot(PlayerInventory inv) {
+    private static int firstEmptyHotbarSlot(Inventory inv) {
         for (int i = 0; i < HOTBAR_SIZE; i++) {
-            if (inv.getStack(i).isEmpty()) return i;
+            if (inv.getItem(i).isEmpty()) return i;
         }
         return inv.getSelectedSlot();
     }
 
     /**
-     * Maps a {@link PlayerInventory} index to the {@link Slot} that represents it in the open screen
+     * Maps a {@link Inventory} index to the {@link Slot} that represents it in the open screen
      * handler. Slot ids shift depending on what's open (a chest pushes the player inventory down by
      * the container's size), so this can't be a constant offset.
      */
-    private static Slot findSlot(ScreenHandler handler, PlayerInventory inv, int invIndex) {
+    private static Slot findSlot(AbstractContainerMenu handler, Inventory inv, int invIndex) {
         for (Slot slot : handler.slots) {
-            if (slot.inventory == inv && slot.getIndex() == invIndex) return slot;
+            if (slot.container == inv && slot.getContainerSlot() == invIndex) return slot;
         }
         return null;
     }
 
     /** Total count of {@code item} across the whole player inventory. */
-    public static int count(PlayerInventory inv, Item item) {
+    public static int count(Inventory inv, Item item) {
         int total = 0;
-        for (int i = 0; i < inv.size(); i++) {
-            ItemStack stack = inv.getStack(i);
+        for (int i = 0; i < inv.getContainerSize(); i++) {
+            ItemStack stack = inv.getItem(i);
             if (stack.getItem() == item) total += stack.getCount();
         }
         return total;

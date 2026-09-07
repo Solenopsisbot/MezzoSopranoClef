@@ -120,6 +120,10 @@ def recv_text(s):
 
 _id = 0
 
+# Every {"event": ...} frame we see, in arrival order. `call` drains frames while waiting for its
+# own response, so events would otherwise be lost before anything could assert on them.
+EVENTS_SEEN = []
+
 
 def call(s, cmd, timeout=30, **args):
     global _id
@@ -127,16 +131,54 @@ def call(s, cmd, timeout=30, **args):
     mid = str(_id)
     send_text(s, json.dumps({"id": mid, "cmd": cmd, "args": args}))
     deadline = time.time() + timeout
+    # The socket still carries the handshake's short timeout, so without this a command that takes
+    # longer than that fails with a bare "timed out" no matter what its own timeout says — which is
+    # exactly what a loaded machine or a slow first screenshot hits.
+    s.settimeout(timeout)
     while time.time() < deadline:
         msg = json.loads(recv_text(s))
         if msg.get("event"):
             print(f"[probe] event: {msg['event']} {msg.get('data')}")
+            EVENTS_SEEN.append(msg)
             continue
         if msg.get("id") == mid:
             if not msg.get("ok"):
                 raise RuntimeError(f"{cmd} failed: {msg.get('error')}")
             return msg.get("result")
     raise RuntimeError(f"timeout waiting for response to '{cmd}'")
+
+
+def version_key(v):
+    """Sortable tuple for a release id, so '1.20.1' < '1.21.8' < '26.2'."""
+    import re as _re
+    return tuple(int(x) for x in _re.findall(r"\d+", v or "0")) or (0,)
+
+
+def wait_for_event(s, name, predicate, timeout=30):
+    """Return the first buffered-or-incoming `name` event matching `predicate`, else raise."""
+    for msg in EVENTS_SEEN:
+        if msg.get("event") == name and predicate(msg.get("data") or {}):
+            return msg["data"]
+    deadline = time.time() + timeout
+    previous = s.gettimeout()
+    try:
+        while time.time() < deadline:
+            s.settimeout(max(1, deadline - time.time()))
+            try:
+                msg = json.loads(recv_text(s))
+            except (socket.timeout, OSError):
+                break
+            if msg.get("event"):
+                print(f"[probe] event: {msg['event']} {msg.get('data')}")
+                EVENTS_SEEN.append(msg)
+                if msg["event"] == name and predicate(msg.get("data") or {}):
+                    return msg["data"]
+    finally:
+        # Restore the socket's original timeout. Leaving the short per-wait deadline in place made
+        # the NEXT request fail with a bare "timed out" the moment a command took longer than the
+        # leftover slice — which is what broke 26.2.
+        s.settimeout(previous)
+    raise RuntimeError(f"no '{name}' event matching predicate within {timeout}s")
 
 
 def main():
@@ -168,7 +210,15 @@ def main():
     assert st and st.get("inWorld"), f"bot never entered a world: {st}"
     print(f"[probe] in world at {st['player']} (dim={st['player']['dimension']})")
 
-    names = [p["name"] for p in call(s, "players")]
+    # The player-info packet lands a little after the world does, so poll rather than sample once:
+    # a bare assert here fails intermittently on a slow join even though the bot is fine.
+    deadline = time.time() + 60
+    names = []
+    while time.time() < deadline:
+        names = [p["name"] for p in call(s, "players")]
+        if name in names:
+            break
+        time.sleep(2)
     print(f"[probe] tab-list: {names}")
     assert name in names, f"expected '{name}' in player list {names}"
 
@@ -180,7 +230,66 @@ def main():
         f.write(raw)
     print(f"[probe] screenshot OK backend={shot.get('backend')} bytes={len(raw)} -> {path}")
 
-    call(s, "chat", message="MezzoSopranoClef e2e: PASS")
+    # Chat round-trip. Sending proves the outbound path; the server echoes the message back to
+    # us, so requiring the inbound event proves the receive path too — which on 1.19.2 and older
+    # is a packet mixin rather than a Fabric API event, and is otherwise untested.
+    marker = "MezzoSopranoClef e2e: PASS"
+    assert call(s, "subscribe", events=["chat", "blockUpdate"]) is not None
+    call(s, "chat", message=marker)
+    got = wait_for_event(s, "chat", lambda d: marker in (d.get("text") or ""), timeout=30)
+    assert got.get("kind") == "chat", f"echoed message had kind={got.get('kind')!r}, want 'chat'"
+    print(f"[probe] chat round-trip OK (sender={got.get('sender')!r})")
+
+    # Packet-derived events (blockUpdate/itemPickup/entityHurt/explosion) come from a mixin on
+    # ClientPacketListener. If that mixin is not listed in the module's mixin config it is simply
+    # absent — `defaultRequire` never trips — and `subscribe` still answers {subscribed:[...]}
+    # while nothing is ever delivered. So provoke one and require it, rather than trusting the
+    # subscribe ack. The mixin only exists from 1.20.1 up; older targets skip with a note.
+    native = (st.get("protocol") or {}).get("native") or ""
+    if version_key(native) >= version_key("1.20.1"):
+        # Read the position fresh, and only once the bot has stopped falling. The world check can
+        # pass while it is still descending to the flat-world floor, and a stale position puts the
+        # target block a hundred blocks away — outside events.blockUpdateRadius, so the client
+        # correctly suppresses the event and the assertion wrongly blames the mixin.
+        settled = time.time() + 30
+        pos = st["player"]
+        while time.time() < settled:
+            pos = (call(s, "status").get("player") or pos)
+            if pos.get("onGround"):
+                break
+            time.sleep(1)
+        # Falling out of that loop without ever landing would reintroduce the exact stale-position
+        # bug it exists to prevent, and the failure would surface below as "the packet mixin is not
+        # wired" — blaming the client for the harness's problem. Name the real cause instead.
+        assert pos.get("onGround"), (
+            f"bot never landed within 30s (last y={pos.get('y')!r}) — refusing to place the probe "
+            f"block from a mid-fall position, which would test nothing")
+        bx, by, bz = int(pos["x"]) + 2, int(pos["y"]) - 1, int(pos["z"])
+        # Retry with a different block each time. A client starved of CPU (a full matrix run has a
+        # server, a game and Gradle competing) can be slow enough to miss a 30s window, and reusing
+        # the same block would make the retry a no-op the server never broadcasts.
+        # Match the exact coordinates. A bare `lambda d: True` is satisfied by any block change
+        # the server happens to broadcast, so it proves the event stream is alive rather than that
+        # our setblock came back — a weaker claim than the assertion message makes.
+        def at_target(d):
+            return (d.get("x"), d.get("y"), d.get("z")) == (bx, by, bz)
+
+        seen = None
+        for block in ("minecraft:stone", "minecraft:dirt", "minecraft:cobblestone"):
+            call(s, "chat", message=f"/setblock {bx} {by} {bz} {block}")
+            try:
+                seen = wait_for_event(s, "blockUpdate", at_target, timeout=20)
+                break
+            except RuntimeError:
+                continue
+        assert seen is not None, (
+            f"no blockUpdate event at ({bx},{by},{bz}) after three setblock attempts — the "
+            f"packet mixin is not wired "
+            f"on {native} (subscribe succeeds either way, so this is the only thing that proves it)")
+        print(f"[probe] blockUpdate event OK (packet mixin is wired on {native})")
+    else:
+        print(f"[probe] blockUpdate check skipped: no packet mixin on {native} (needs 1.20.1+)")
+
     print("[probe] PASS")
     return 0
 

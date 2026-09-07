@@ -7,28 +7,28 @@ import dev.mezzo.clef.api.CommandDispatcher;
 import dev.mezzo.clef.bot.ActionManager;
 import dev.mezzo.clef.bot.Hotbar;
 import dev.mezzo.clef.bot.RecipeIndex;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.entity.Entity;
-import net.minecraft.entity.EntityType;
-import net.minecraft.entity.ItemEntity;
-import net.minecraft.entity.LivingEntity;
-import net.minecraft.entity.SpawnGroup;
-import net.minecraft.entity.mob.MobEntity;
-import net.minecraft.entity.passive.TameableEntity;
-import net.minecraft.entity.passive.VillagerEntity;
-import net.minecraft.entity.player.PlayerInventory;
-import net.minecraft.item.ItemStack;
-import net.minecraft.network.packet.c2s.play.PlayerActionC2SPacket;
-import net.minecraft.registry.Registries;
-import net.minecraft.util.ActionResult;
-import net.minecraft.util.Hand;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Direction;
-import net.minecraft.util.math.Vec3d;
-
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import net.minecraft.client.Minecraft;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.network.protocol.game.ServerboundPlayerActionPacket;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.InteractionResult;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.Mob;
+import net.minecraft.world.entity.MobCategory;
+import net.minecraft.world.entity.TamableAnimal;
+import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.entity.npc.villager.Villager;
+import net.minecraft.world.phys.EntityHitResult;
+import net.minecraft.world.entity.player.Inventory;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.phys.Vec3;
 
 /** Bot actuation + world-query commands (movement, mining, placing, combat, inventory, queries). */
 public final class ActionCommands {
@@ -62,7 +62,7 @@ public final class ActionCommands {
                     Direction face = parseFace(ctx.str("face", "up"));
                     boolean wait = ctx.bool("wait", false);
                     CompletableFuture<ActionManager.MineResult> done = ctx.onMain(() -> {
-                        MinecraftClient mc = MinecraftClient.getInstance();
+                        Minecraft mc = Minecraft.getInstance();
                         if (mc.player == null) throw ApiException.notInWorld();
                         return ctx.server.services.actions.startMining(mc, pos, face);
                     });
@@ -80,7 +80,7 @@ public final class ActionCommands {
                 });
 
         d.register("stopMine", "stop breaking", ctx -> ctx.onMain(() -> {
-            ctx.server.services.actions.stopMining(MinecraftClient.getInstance());
+            ctx.server.services.actions.stopMining(Minecraft.getInstance());
             JsonObject o = new JsonObject();
             o.addProperty("stopped", true);
             return o;
@@ -89,7 +89,7 @@ public final class ActionCommands {
         d.register("breakBlock", "instantly break a block (creative) {x,y,z}", ctx -> {
             BlockPos pos = new BlockPos(ctx.requireInt("x"), ctx.requireInt("y"), ctx.requireInt("z"));
             return ctx.onMain(() -> {
-                boolean ok = ctx.server.services.actions.breakInstant(MinecraftClient.getInstance(), pos);
+                boolean ok = ctx.server.services.actions.breakInstant(Minecraft.getInstance(), pos);
                 JsonObject o = new JsonObject();
                 o.addProperty("broken", ok);
                 return o;
@@ -104,19 +104,19 @@ public final class ActionCommands {
                     String item = ctx.has("item") ? ctx.requireStr("item") : null;
                     boolean confirm = ctx.bool("confirm", true);
 
-                    record Started(ActionResult result, Hotbar.Selection selection,
+                    record Started(InteractionResult result, Hotbar.Selection selection,
                                    CompletableFuture<ActionManager.PlaceOutcome> outcome) {}
 
                     Started started = ctx.onMain(() -> {
-                        MinecraftClient mc = MinecraftClient.getInstance();
-                        if (mc.player == null || mc.interactionManager == null) throw ApiException.notInWorld();
+                        Minecraft mc = Minecraft.getInstance();
+                        if (mc.player == null || mc.gameMode == null) throw ApiException.notInWorld();
                         Hotbar.Selection selection = item == null ? null
                                 : Hotbar.select(mc, RecipeIndex.resolveItem(item), null);
                         // Start watching *before* the click: the server can answer within a tick.
                         CompletableFuture<ActionManager.PlaceOutcome> outcome = confirm
                                 ? ctx.server.services.actions.confirmPlace(mc, pos, face, PLACE_CONFIRM_TICKS)
                                 : null;
-                        ActionResult result = ctx.server.services.actions.interactBlock(mc, pos, face);
+                        InteractionResult result = ctx.server.services.actions.interactBlock(mc, pos, face);
                         return new Started(result, selection, outcome);
                     });
 
@@ -125,7 +125,7 @@ public final class ActionCommands {
                     if (started.selection() != null) o.addProperty("slot", started.selection().slot());
                     if (started.outcome() == null) {
                         // confirm:false — we only know the click was accepted locally.
-                        o.addProperty("placed", started.result().isAccepted());
+                        o.addProperty("placed", started.result().consumesAction());
                         o.addProperty("confirmed", false);
                         return o;
                     }
@@ -143,9 +143,9 @@ public final class ActionCommands {
                 });
 
         d.register("use", "use held item / right-click air {hand?}", ctx -> {
-            Hand hand = parseHand(ctx.str("hand", "main"));
+            InteractionHand hand = parseHand(ctx.str("hand", "main"));
             return ctx.onMain(() -> {
-                MinecraftClient mc = MinecraftClient.getInstance();
+                Minecraft mc = Minecraft.getInstance();
                 if (mc.player == null) throw ApiException.notInWorld();
                 ctx.server.services.actions.useItem(mc, hand);
                 JsonObject o = new JsonObject();
@@ -157,14 +157,14 @@ public final class ActionCommands {
         d.register("attack", "attack {entityId?} or the nearest entity within reach", ctx -> {
             Integer id = ctx.has("entityId") ? ctx.i("entityId", -1) : null;
             return ctx.onMain(() -> {
-                MinecraftClient mc = MinecraftClient.getInstance();
-                if (mc.player == null || mc.world == null) throw ApiException.notInWorld();
-                Entity target = id != null ? mc.world.getEntityById(id) : nearest(mc, 4.0);
+                Minecraft mc = Minecraft.getInstance();
+                if (mc.player == null || mc.level == null) throw ApiException.notInWorld();
+                Entity target = id != null ? mc.level.getEntity(id) : nearest(mc, 4.0);
                 if (target == null) throw ApiException.notFound("no target in range");
                 ctx.server.services.actions.attackEntity(mc, target);
                 JsonObject o = new JsonObject();
                 o.addProperty("attacked", target.getId());
-                o.addProperty("type", EntityType.getId(target.getType()).toString());
+                o.addProperty("type", EntityType.getKey(target.getType()).toString());
                 return o;
             });
         });
@@ -173,7 +173,7 @@ public final class ActionCommands {
             int slot = ctx.requireInt("slot");
             if (slot < 0 || slot > 8) throw ApiException.badArgs("slot must be 0-8");
             return ctx.onMain(() -> {
-                MinecraftClient mc = MinecraftClient.getInstance();
+                Minecraft mc = Minecraft.getInstance();
                 if (mc.player == null) throw ApiException.notInWorld();
                 mc.player.getInventory().setSelectedSlot(slot);
                 JsonObject o = new JsonObject();
@@ -185,9 +185,9 @@ public final class ActionCommands {
         d.register("dropItem", "drop the held item {all?}", ctx -> {
             boolean all = ctx.bool("all", false);
             return ctx.onMain(() -> {
-                MinecraftClient mc = MinecraftClient.getInstance();
+                Minecraft mc = Minecraft.getInstance();
                 if (mc.player == null) throw ApiException.notInWorld();
-                boolean ok = mc.player.dropSelectedItem(all);
+                boolean ok = mc.player.drop(all);
                 JsonObject o = new JsonObject();
                 o.addProperty("dropped", ok);
                 return o;
@@ -195,19 +195,19 @@ public final class ActionCommands {
         });
 
         d.register("inventory", "list inventory contents", ctx -> ctx.onMain(() -> {
-            MinecraftClient mc = MinecraftClient.getInstance();
+            Minecraft mc = Minecraft.getInstance();
             if (mc.player == null) throw ApiException.notInWorld();
-            PlayerInventory inv = mc.player.getInventory();
+            Inventory inv = mc.player.getInventory();
             JsonObject o = new JsonObject();
             o.addProperty("selectedSlot", inv.getSelectedSlot());
             JsonArray items = new JsonArray();
-            for (int i = 0; i < inv.size(); i++) {
-                ItemStack st = inv.getStack(i);
+            for (int i = 0; i < inv.getContainerSize(); i++) {
+                ItemStack st = inv.getItem(i);
                 if (st.isEmpty()) continue;
                 JsonObject it = new JsonObject();
                 it.addProperty("slot", i);
-                it.addProperty("item", Registries.ITEM.getId(st.getItem()).toString());
-                it.addProperty("name", st.getName().getString());
+                it.addProperty("item", BuiltInRegistries.ITEM.getKey(st.getItem()).toString());
+                it.addProperty("name", st.getHoverName().getString());
                 it.addProperty("count", st.getCount());
                 items.add(it);
             }
@@ -221,15 +221,15 @@ public final class ActionCommands {
                     double radius = ctx.d("radius", 16);
                     Set<String> kinds = ctx.strings("kinds");
                     return ctx.onMain(() -> {
-                        MinecraftClient mc = MinecraftClient.getInstance();
-                        if (mc.player == null || mc.world == null) throw ApiException.notInWorld();
+                        Minecraft mc = Minecraft.getInstance();
+                        if (mc.player == null || mc.level == null) throw ApiException.notInWorld();
                         double r2 = radius * radius;
                         JsonArray arr = new JsonArray();
-                        for (Entity e : mc.world.getEntities()) {
+                        for (Entity e : mc.level.entitiesForRendering()) {
                             if (e == mc.player || !e.isAlive()) continue;
-                            double d2 = e.squaredDistanceTo(mc.player);
+                            double d2 = e.distanceToSqr(mc.player);
                             if (d2 > r2) continue;
-                            String type = EntityType.getId(e.getType()).toString();
+                            String type = EntityType.getKey(e.getType()).toString();
                             if (kinds != null && !matchesKind(kinds, type)) continue;
                             arr.add(describeEntity(mc, e, type, Math.sqrt(d2)));
                         }
@@ -240,11 +240,11 @@ public final class ActionCommands {
         d.register("blockAt", "block id at {x,y,z}", ctx -> {
             BlockPos pos = new BlockPos(ctx.requireInt("x"), ctx.requireInt("y"), ctx.requireInt("z"));
             return ctx.onMain(() -> {
-                MinecraftClient mc = MinecraftClient.getInstance();
-                if (mc.world == null) throw ApiException.notInWorld();
-                var state = mc.world.getBlockState(pos);
+                Minecraft mc = Minecraft.getInstance();
+                if (mc.level == null) throw ApiException.notInWorld();
+                var state = mc.level.getBlockState(pos);
                 JsonObject o = new JsonObject();
-                o.addProperty("block", Registries.BLOCK.getId(state.getBlock()).toString());
+                o.addProperty("block", BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString());
                 o.addProperty("air", state.isAir());
                 return o;
             });
@@ -252,26 +252,28 @@ public final class ActionCommands {
 
         d.register("interactEntity", "right-click an entity — mount/trade/breed/leash {entityId, hand?}", ctx -> {
             int id = ctx.requireInt("entityId");
-            Hand hand = parseHand(ctx.str("hand", "main"));
+            InteractionHand hand = parseHand(ctx.str("hand", "main"));
             return ctx.onMain(() -> {
-                MinecraftClient mc = MinecraftClient.getInstance();
-                if (mc.player == null || mc.world == null || mc.interactionManager == null) throw ApiException.notInWorld();
-                Entity e = mc.world.getEntityById(id);
+                Minecraft mc = Minecraft.getInstance();
+                if (mc.player == null || mc.level == null || mc.gameMode == null) throw ApiException.notInWorld();
+                Entity e = mc.level.getEntity(id);
                 if (e == null) throw ApiException.notFound("no entity with id " + id);
-                ActionResult r = mc.interactionManager.interactEntity(mc.player, e, hand);
+                // 26.x wants the hit result too; hitting the entity at its own position is what a plain
+                // "right-click the mob" does.
+                InteractionResult r = mc.gameMode.interact(mc.player, e, new EntityHitResult(e), hand);
                 JsonObject o = new JsonObject();
                 o.addProperty("interacted", id);
-                o.addProperty("type", EntityType.getId(e.getType()).toString());
+                o.addProperty("type", EntityType.getKey(e.getType()).toString());
                 o.addProperty("result", String.valueOf(r));
                 return o;
             });
         });
 
         d.register("swapHands", "swap main-hand and off-hand items", ctx -> ctx.onMain(() -> {
-            MinecraftClient mc = MinecraftClient.getInstance();
-            if (mc.player == null || mc.getNetworkHandler() == null) throw ApiException.notInWorld();
-            mc.getNetworkHandler().sendPacket(new PlayerActionC2SPacket(
-                    PlayerActionC2SPacket.Action.SWAP_ITEM_WITH_OFFHAND, BlockPos.ORIGIN, Direction.DOWN));
+            Minecraft mc = Minecraft.getInstance();
+            if (mc.player == null || mc.getConnection() == null) throw ApiException.notInWorld();
+            mc.getConnection().send(new ServerboundPlayerActionPacket(
+                    ServerboundPlayerActionPacket.Action.SWAP_ITEM_WITH_OFFHAND, BlockPos.ZERO, Direction.DOWN));
             JsonObject o = new JsonObject();
             o.addProperty("swapped", true);
             return o;
@@ -281,9 +283,9 @@ public final class ActionCommands {
             BlockPos pos = new BlockPos(ctx.requireInt("x"), ctx.requireInt("y"), ctx.requireInt("z"));
             boolean nbt = ctx.bool("nbt", false);
             return ctx.onMain(() -> {
-                MinecraftClient mc = MinecraftClient.getInstance();
-                if (mc.interactionManager == null) throw ApiException.notInWorld();
-                mc.interactionManager.pickItemFromBlock(pos, nbt);
+                Minecraft mc = Minecraft.getInstance();
+                if (mc.gameMode == null) throw ApiException.notInWorld();
+                mc.gameMode.handlePickItemFromBlock(pos, nbt);
                 JsonObject o = new JsonObject();
                 o.addProperty("picked", true);
                 return o;
@@ -313,9 +315,9 @@ public final class ActionCommands {
         });
 
         d.register("respawn", "respawn after death", ctx -> ctx.onMain(() -> {
-            MinecraftClient mc = MinecraftClient.getInstance();
+            Minecraft mc = Minecraft.getInstance();
             if (mc.player == null) throw ApiException.notInWorld();
-            mc.player.requestRespawn();
+            mc.player.respawn();
             JsonObject o = new JsonObject();
             o.addProperty("respawned", true);
             return o;
@@ -343,7 +345,7 @@ public final class ActionCommands {
      * hurt, what is it holding, is it mine, and is it looking at me. Fields that don't apply to a
      * given entity are simply absent rather than null-filled.
      */
-    static JsonObject describeEntity(MinecraftClient mc, Entity e, String type, double distance) {
+    static JsonObject describeEntity(Minecraft mc, Entity e, String type, double distance) {
         JsonObject je = new JsonObject();
         je.addProperty("id", e.getId());
         je.addProperty("type", type);
@@ -354,7 +356,7 @@ public final class ActionCommands {
         je.addProperty("distance", distance);
         je.addProperty("onFire", e.isOnFire());
 
-        Vec3d velocity = e.getVelocity();
+        Vec3 velocity = e.getDeltaMovement();
         JsonArray vel = new JsonArray();
         vel.add(velocity.x);
         vel.add(velocity.y);
@@ -364,39 +366,39 @@ public final class ActionCommands {
         if (e instanceof LivingEntity living) {
             je.addProperty("health", living.getHealth());
             je.addProperty("maxHealth", living.getMaxHealth());
-            je.addProperty("armor", living.getArmor());
+            je.addProperty("armor", living.getArmorValue());
             je.addProperty("baby", living.isBaby());
-            ItemStack held = living.getMainHandStack();
-            if (!held.isEmpty()) je.addProperty("held", Registries.ITEM.getId(held.getItem()).toString());
+            ItemStack held = living.getMainHandItem();
+            if (!held.isEmpty()) je.addProperty("held", BuiltInRegistries.ITEM.getKey(held.getItem()).toString());
             je.addProperty("lookingAtMe", lookingAt(living, mc.player));
         }
 
         // "Hostile" is two different questions: is this the kind of thing that attacks players, and
         // is this particular one attacking *me* right now. A tamed wolf is not a monster but can be
         // actively hunting you; a distant zombie is a monster that hasn't noticed you.
-        boolean monster = e.getType().getSpawnGroup() == SpawnGroup.MONSTER;
-        boolean targetingUs = e instanceof MobEntity mob && mob.getTarget() == mc.player;
+        boolean monster = e.getType().getCategory() == MobCategory.MONSTER;
+        boolean targetingUs = e instanceof Mob mob && mob.getTarget() == mc.player;
         je.addProperty("hostile", monster || targetingUs);
         je.addProperty("targetingMe", targetingUs);
 
         if (e instanceof ItemEntity item) {
             JsonObject stack = new JsonObject();
-            stack.addProperty("id", Registries.ITEM.getId(item.getStack().getItem()).toString());
-            stack.addProperty("count", item.getStack().getCount());
+            stack.addProperty("id", BuiltInRegistries.ITEM.getKey(item.getItem().getItem()).toString());
+            stack.addProperty("count", item.getItem().getCount());
             je.add("item", stack);
         }
-        if (e instanceof VillagerEntity villager) {
+        if (e instanceof Villager villager) {
             JsonObject data = new JsonObject();
-            villager.getVillagerData().profession().getKey()
-                    .ifPresent(key -> data.addProperty("profession", key.getValue().toString()));
+            villager.getVillagerData().profession().unwrapKey()
+                    .ifPresent(key -> data.addProperty("profession", key.identifier().toString()));
             data.addProperty("level", villager.getVillagerData().level());
             je.add("villager", data);
         }
-        if (e instanceof TameableEntity tameable && tameable.isTamed()) {
+        if (e instanceof TamableAnimal tameable && tameable.isTame()) {
             var owner = tameable.getOwnerReference();
             if (owner != null) {
-                je.addProperty("owner", owner.getUuid().toString());
-                je.addProperty("ownedByMe", mc.player != null && owner.getUuid().equals(mc.player.getUuid()));
+                je.addProperty("owner", owner.getUUID().toString());
+                je.addProperty("ownedByMe", mc.player != null && owner.getUUID().equals(mc.player.getUUID()));
             }
         }
         return je;
@@ -408,11 +410,11 @@ public final class ActionCommands {
      */
     private static double lookingAt(LivingEntity source, Entity target) {
         if (target == null) return 0;
-        Vec3d look = source.getRotationVec(1.0f).normalize();
-        Vec3d toTarget = target.getEyePos().subtract(source.getEyePos());
+        Vec3 look = source.getViewVector(1.0f).normalize();
+        Vec3 toTarget = target.getEyePosition().subtract(source.getEyePosition());
         double length = toTarget.length();
         if (length < 1e-6) return 1;
-        return look.dotProduct(toTarget.multiply(1.0 / length));
+        return look.dot(toTarget.scale(1.0 / length));
     }
 
     /** Accepts both {@code minecraft:zombie} and a bare {@code zombie} in the {@code kinds} filter. */
@@ -430,21 +432,21 @@ public final class ActionCommands {
         }
     }
 
-    private static Hand parseHand(String s) {
+    private static InteractionHand parseHand(String s) {
         String hand = s == null ? "main" : s.trim().toLowerCase();
         return switch (hand) {
-            case "main", "main_hand", "mainhand" -> Hand.MAIN_HAND;
-            case "off", "off_hand", "offhand" -> Hand.OFF_HAND;
+            case "main", "main_hand", "mainhand" -> InteractionHand.MAIN_HAND;
+            case "off", "off_hand", "offhand" -> InteractionHand.OFF_HAND;
             default -> throw ApiException.badArgs("hand must be 'main' or 'off'");
         };
     }
 
-    private static Entity nearest(MinecraftClient mc, double maxDist) {
+    private static Entity nearest(Minecraft mc, double maxDist) {
         Entity best = null;
         double bd = maxDist * maxDist;
-        for (Entity e : mc.world.getEntities()) {
+        for (Entity e : mc.level.entitiesForRendering()) {
             if (e == mc.player || !e.isAlive()) continue;
-            double d2 = e.squaredDistanceTo(mc.player);
+            double d2 = e.distanceToSqr(mc.player);
             if (d2 < bd) { bd = d2; best = e; }
         }
         return best;

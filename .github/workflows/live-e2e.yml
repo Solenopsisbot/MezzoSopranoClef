@@ -1,13 +1,21 @@
 name: Live E2E
 
+# Real-server smoke tests: boot a vanilla server, boot the real headless client, join, screenshot.
+# Two jobs: the client's own version end to end, and the multi-version matrix (one client, a
+# server per protocol era through ViaFabricPlus). Heavy, so manual + nightly rather than per push.
 on:
   workflow_dispatch:
+    inputs:
+      versions:
+        description: "Server versions for the matrix job (space-separated; empty = default era set; 'all' = every release 1.12.2..current)"
+        required: false
+        default: ""
   schedule:
     - cron: "17 9 * * *"
 
 jobs:
   live:
-    name: Real Minecraft server smoke test
+    name: Real Minecraft server smoke test (client version)
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -15,14 +23,13 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: "25"
           cache: gradle
       - uses: actions/setup-python@v5
         with:
           python-version: "3.x"
       - name: Run live e2e
         env:
-          MC_VERSION: "1.21.8"
           WS_PORT: "8731"
           BOT_NAME: "ClefBot"
         run: scripts/e2e.sh
@@ -34,5 +41,80 @@ jobs:
             e2e/*.log
             e2e/*.png
             e2e/*.out
-            e2e/server/server.log
+            e2e/servers/*/server.log
+          if-no-files-found: ignore
+
+  version-matrix:
+    name: Multi-version server matrix (ViaFabricPlus)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      # One JDK per server era. setup-java installs all of them; the last listed becomes the
+      # default `java` (Gradle + the client need 25). scripts/pick_server_java.py finds the rest
+      # through JAVA_HOME_<N>_X64, which setup-java exports.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: |
+            8
+            17
+            21
+            25
+          cache: gradle
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Run the matrix
+        env:
+          WS_PORT: "8731"
+          BOT_NAME: "ClefBot"
+          VERSIONS: ${{ github.event.inputs.versions }}
+        run: |
+          if [ "$VERSIONS" = "all" ]; then scripts/verify_versions.sh --all;
+          else scripts/verify_versions.sh $VERSIONS; fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: version-matrix-artifacts
+          path: |
+            e2e/versions-report.json
+            e2e/*.log
+            e2e/*.png
+            e2e/servers/*/server.log
+          if-no-files-found: ignore
+
+  native-clients:
+    name: Native per-version client builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      # One JDK per target era; the last listed becomes the default `java`.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: |
+            17
+            21
+            25
+          cache: gradle
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      # Every native build boots against a real server of its OWN version. Needs a GL context on
+      # the targets that cannot boot GPU-free, hence Xvfb.
+      - name: Install Xvfb (older targets need a real GL context)
+        run: sudo apt-get update && sudo apt-get install -y xvfb libgl1 mesa-utils
+      - name: Verify native client builds
+        run: xvfb-run -a scripts/verify_native.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-client-artifacts
+          path: |
+            e2e/native-report.json
+            e2e/native-*.out
+            e2e/native-*.png
+            e2e/native-*-bot.log
           if-no-files-found: ignore

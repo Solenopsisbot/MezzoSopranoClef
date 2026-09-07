@@ -21,11 +21,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up JDK 21
+      - name: Set up JDK 25
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: "25"
           cache: gradle
 
       - name: Make gradlew executable
@@ -34,17 +34,24 @@ jobs:
       - name: Check whitespace
         run: git diff --check
 
-      # `./gradlew build` compiles the mod + launcher, runs the JUnit suites, and
-      # remaps the jar (Fabric/Loom) into build/libs.
-      - name: Build (compile, JUnit tests, remap jar, launcher jar)
+      # `./gradlew build` compiles the newest-version mod + launcher, runs the JUnit suites, and
+      # produces the mod jar in build/libs (26.x is unobfuscated, so there is no remap step). It
+      # also builds every native per-version module, each of which compiles the shared `common/`
+      # source against that release's real Minecraft and remaps a mod jar for it — so a change to
+      # `common/` that breaks an older target fails here rather than at runtime.
+      - name: Build (compile, JUnit tests, mod jars for every version target, launcher jar)
         run: ./gradlew build --stacktrace --no-daemon
 
       - name: Upload jars
         uses: actions/upload-artifact@v4
         with:
           name: jars
+          # Forge is excluded on purpose: it builds but its mixins never apply, so uploading the
+          # jar invites someone to run a client that cannot work.
           path: |
             build/libs/*.jar
+            versions/fabric-*/build/libs/*.jar
+            versions/neoforge-*/build/libs/*.jar
             launcher/build/libs/*.jar
 
   typescript-client:
@@ -62,5 +69,22 @@ jobs:
           cache-dependency-path: clients/typescript/package-lock.json
       - name: Install dependencies
         run: npm ci
+      # `node --test` transpiles without checking types, so a duplicate identifier (a field and a
+      # method of the same name, say) ran green for as long as nobody called it. Typecheck first.
+      - name: Typecheck
+        run: npm run typecheck
       - name: Test
         run: npm test
+
+  version-matrix:
+    name: Verify Minecraft version matrix pins
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+      # Every release in minecraft-versions.json must exist in Mojang's manifest, and the client
+      # pins (Fabric API, ViaFabricPlus, Baritone) must still resolve for the client version.
+      - run: ./gradlew verifyVersionMatrix --no-daemon
