@@ -42,3 +42,7 @@ e2e-*/
 logs/
 __pycache__/
 *.pyc
+
+# npm install output. Never tracked: package-lock.json pins the tree and `npm ci` rebuilds it
+# byte-for-byte, so committing it only bloats the repo (37 MB here) and churns every diff.
+node_modules/
