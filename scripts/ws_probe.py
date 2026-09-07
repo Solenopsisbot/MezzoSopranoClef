@@ -258,20 +258,33 @@ def main():
             if pos.get("onGround"):
                 break
             time.sleep(1)
+        # Falling out of that loop without ever landing would reintroduce the exact stale-position
+        # bug it exists to prevent, and the failure would surface below as "the packet mixin is not
+        # wired" — blaming the client for the harness's problem. Name the real cause instead.
+        assert pos.get("onGround"), (
+            f"bot never landed within 30s (last y={pos.get('y')!r}) — refusing to place the probe "
+            f"block from a mid-fall position, which would test nothing")
         bx, by, bz = int(pos["x"]) + 2, int(pos["y"]) - 1, int(pos["z"])
         # Retry with a different block each time. A client starved of CPU (a full matrix run has a
         # server, a game and Gradle competing) can be slow enough to miss a 30s window, and reusing
         # the same block would make the retry a no-op the server never broadcasts.
+        # Match the exact coordinates. A bare `lambda d: True` is satisfied by any block change
+        # the server happens to broadcast, so it proves the event stream is alive rather than that
+        # our setblock came back — a weaker claim than the assertion message makes.
+        def at_target(d):
+            return (d.get("x"), d.get("y"), d.get("z")) == (bx, by, bz)
+
         seen = None
         for block in ("minecraft:stone", "minecraft:dirt", "minecraft:cobblestone"):
             call(s, "chat", message=f"/setblock {bx} {by} {bz} {block}")
             try:
-                seen = wait_for_event(s, "blockUpdate", lambda d: True, timeout=20)
+                seen = wait_for_event(s, "blockUpdate", at_target, timeout=20)
                 break
             except RuntimeError:
                 continue
         assert seen is not None, (
-            f"no blockUpdate event after three setblock attempts — the packet mixin is not wired "
+            f"no blockUpdate event at ({bx},{by},{bz}) after three setblock attempts — the "
+            f"packet mixin is not wired "
             f"on {native} (subscribe succeeds either way, so this is the only thing that proves it)")
         print(f"[probe] blockUpdate event OK (packet mixin is wired on {native})")
     else:

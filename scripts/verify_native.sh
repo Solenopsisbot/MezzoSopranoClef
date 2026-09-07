@@ -81,6 +81,12 @@ for v in "${VERSIONS[@]}"; do
     results="${results}{\"minecraft\":\"$mc\",\"loader\":\"$loader\",\"ok\":false},"
     continue
   fi
+  # `timeout` is GNU coreutils and is NOT on a stock macOS. Without this check every target
+  # fails with a "command not found" buried in its own log, which reads like 23 product failures.
+  if ! command -v timeout >/dev/null 2>&1; then
+    echo "[native] FATAL: 'timeout' not found. Install GNU coreutils (brew install coreutils)." >&2
+    exit 1
+  fi
   rm -f "$ROOT/e2e/bot.log"
   # Cap each target. Without this one hung step — a stalled download, a wedged client — blocks the
   # whole matrix indefinitely rather than failing that target and moving on.

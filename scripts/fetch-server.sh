@@ -12,10 +12,24 @@ mkdir -p "$DIR"
 
 if [[ ! -f "$DIR/server.jar" ]]; then
   echo "[server] resolving $MC_VERSION ..."
+  # Name the failure here too. These used to surface as a bare Python traceback (or a naked
+  # StopIteration when the id is simply absent from the manifest), which says nothing useful.
   VURL=$(curl -fsSL --connect-timeout 30 --max-time 120 --retry 3 https://piston-meta.mojang.com/mc/game/version_manifest_v2.json \
-    | python3 -c "import sys,json;d=json.load(sys.stdin);print(next(v['url'] for v in d['versions'] if v['id']=='$MC_VERSION'))")
+    | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+url = next((v['url'] for v in d['versions'] if v['id'] == '$MC_VERSION'), None)
+if url is None:
+    sys.exit(\"no such version '$MC_VERSION' in Mojang's version manifest\")
+print(url)") || { echo "[server] FAILED to resolve $MC_VERSION from Mojang's manifest" >&2; exit 1; }
   SURL=$(curl -fsSL --connect-timeout 30 --max-time 120 --retry 3 "$VURL" \
-    | python3 -c "import sys,json;print(json.load(sys.stdin)['downloads']['server']['url'])")
+    | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+try:
+    print(d['downloads']['server']['url'])
+except KeyError:
+    sys.exit(\"$MC_VERSION has no server download in its version metadata\")") || { echo "[server] FAILED to find a server jar for $MC_VERSION" >&2; exit 1; }
   echo "[server] downloading $SURL"
   # Retry, then check what actually landed. A transient curl failure (HTTP/2 PROTOCOL_ERROR shows
   # up often enough) used to leave no jar while the script still said "ready", so the run failed
