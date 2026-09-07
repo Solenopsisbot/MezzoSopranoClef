@@ -66,10 +66,21 @@ for v in "${VERSIONS[@]}"; do
   # Wait for the previous target's server to actually release the port. A blind sleep is not
   # enough on a long serial run: if the old server still holds 25565 the next one cannot
   # bind, and the client ends up talking to the wrong version (or nothing).
+  port="${CLEF_SERVER_PORT:-25565}"
   for _ in $(seq 1 30); do
-    lsof -nP -iTCP:"${CLEF_SERVER_PORT:-25565}" -sTCP:LISTEN >/dev/null 2>&1 || break
+    lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1 || break
     sleep 1
   done
+  # If it is STILL held, whatever owns it is not ours and is not going away — a second copy of
+  # this script, or an unrelated server. Proceeding produces a Minecraft crash report reading
+  # "FAILED TO BIND TO PORT" buried in the server log, which looks like a product failure and
+  # names nothing useful. Fail the target here instead, pointing at the actual holder.
+  if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
+    echo "[native] $v FAIL — port $port still held after 30s by:"
+    lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | sed 's/^/[native]   /'
+    results="${results}{\"minecraft\":\"$mc\",\"loader\":\"$loader\",\"ok\":false},"
+    continue
+  fi
   rm -f "$ROOT/e2e/bot.log"
   # Cap each target. Without this one hung step — a stalled download, a wedged client — blocks the
   # whole matrix indefinitely rather than failing that target and moving on.
