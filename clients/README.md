@@ -80,6 +80,12 @@ png = bot.map(radius=64)                                        # top-down ortho
 region = bot.blocks_in((0, 63, 0), (15, 78, 15))
 from clef import decode_blocks_in
 blocks = decode_blocks_in(region)                               # flat list, x-major
+
+# Combat runs on the bot at 20 Hz — these block until the fight step is over.
+skeleton = bot.entities(radius=32, kinds=["skeleton"])[0]
+bot.equip("minecraft:iron_chestplate")                          # already worn? no-op, not an undress
+bot.shoot_at(skeleton["id"], shots=3)                           # {fired, hits, damage, killed, stopped}
+bot.melee_while(skeleton["id"], max_ms=4000, stop_below_health=6)
 ```
 
 ```ts
@@ -93,7 +99,17 @@ const { png, entities } = await bot.screenshotAnnotated({ width: 640, height: 36
 
 const region = await bot.blocksIn([0, 63, 0], [15, 78, 15]);
 const blocks = decodeBlocksIn(region);                          // flat array, x-major
+
+// Combat runs on the bot at 20 Hz — these resolve when the fight step is over.
+const [skeleton] = await bot.entities(32, ["skeleton"]);
+await bot.equip("minecraft:iron_chestplate");                   // already worn? no-op, not an undress
+await bot.shootAt(skeleton.id, { shots: 3 });
+await bot.meleeWhile(skeleton.id, { maxMs: 4000, stopBelowHealth: 6 });
 ```
+
+Both combat wrappers raise the per-call timeout to match the request, since the client default
+(30 s) is shorter than a volley of arrows. `combatStop()` / `combat_stop()` interrupts one — from a
+second connection if the first is blocked waiting.
 
 `blocksIn` returns a palette plus base64 LEB128 varint indices in **x-major** order —
 `i = ((x-minX)*sizeY + (y-minY))*sizeZ + (z-minZ)`. Both clients ship a reference decoder

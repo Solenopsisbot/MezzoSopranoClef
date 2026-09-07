@@ -5,6 +5,7 @@ import com.google.gson.JsonObject;
 import dev.mezzo.clef.api.ApiException;
 import dev.mezzo.clef.api.CommandDispatcher;
 import dev.mezzo.clef.bot.ActionManager;
+import dev.mezzo.clef.bot.EntityMotion;
 import dev.mezzo.clef.bot.Hotbar;
 import dev.mezzo.clef.bot.RecipeIndex;
 import net.minecraft.client.MinecraftClient;
@@ -354,7 +355,14 @@ public final class ActionCommands {
         je.addProperty("distance", distance);
         je.addProperty("onFire", e.isOnFire());
 
-        Vec3d velocity = e.getVelocity();
+        // Motion, in blocks per tick, as the client actually observed it — see EntityMotion for
+        // why Entity.getVelocity() alone reports zero for every server-driven mob. Exposed twice:
+        // `vx/vy/vz` for callers doing arithmetic on it, `velocity` as the array this command has
+        // always had. Same numbers; picking either is fine.
+        Vec3d velocity = EntityMotion.of(e);
+        je.addProperty("vx", velocity.x);
+        je.addProperty("vy", velocity.y);
+        je.addProperty("vz", velocity.z);
         JsonArray vel = new JsonArray();
         vel.add(velocity.x);
         vel.add(velocity.y);

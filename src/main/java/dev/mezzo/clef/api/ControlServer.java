@@ -51,7 +51,7 @@ public final class ControlServer implements WsServer.Listener {
             "status", "auth.status", "players", "screenshot", "nav.status",
             "inventory", "entities", "blockAt", "container", "screen", "serverui", "findItem",
             "findBlocks", "blocksIn", "target", "registry", "nav.check",
-            "recipes", "craftable", "chatHistory");
+            "recipes", "craftable", "chatHistory", "combat.status");
 
     /** Shared service handles (screenshots, navigation) reachable from any command. */
     public final ClefServices services;
@@ -68,6 +68,7 @@ public final class ControlServer implements WsServer.Listener {
         dev.mezzo.clef.api.commands.UiCommands.registerAll(dispatcher);
         dev.mezzo.clef.api.commands.WorldCommands.registerAll(dispatcher);
         dev.mezzo.clef.api.commands.CraftCommands.registerAll(dispatcher);
+        dev.mezzo.clef.api.commands.CombatCommands.registerAll(dispatcher);
         ws.start();
         if (config.control.dashboard) {
             dashboard = new DashboardServer(config.control.host, config.control.dashboardPort, config.control.port);

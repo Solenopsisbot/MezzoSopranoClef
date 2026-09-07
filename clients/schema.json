@@ -644,7 +644,7 @@
           "required": false
         }
       ],
-      "result": "[{id,type,name,x,y,z,distance,velocity,onFire,health?,maxHealth?,armor?,baby?,held?,lookingAtMe?,hostile,targetingMe,item?,villager?,owner?}]"
+      "result": "[{id,type,name,x,y,z,distance,vx,vy,vz,velocity:[vx,vy,vz],onFire,health?,maxHealth?,armor?,baby?,held?,lookingAtMe?,hostile,targetingMe,item?,villager?,owner?}] — vx/vy/vz are blocks per tick as the client observed the entity move, not the raw velocity field, which is zero for anything the server drives"
     },
     {
       "name": "blockAt",
@@ -892,6 +892,95 @@
       "result": "{grid,knownRecipes,items:[{item,count,fitsOpenGrid}]}"
     },
     {
+      "name": "shootAt",
+      "summary": "loose arrows at an entity, tracking it every tick — solves lead and arrow drop, aims on the release tick {entityId, lead?=true, charge?=25, shots?=1, maxRange?=64, wait?=true}",
+      "args": [
+        {
+          "name": "entityId",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "lead",
+          "type": "bool",
+          "required": false,
+          "default": "true"
+        },
+        {
+          "name": "charge",
+          "type": "int",
+          "required": false,
+          "default": "25"
+        },
+        {
+          "name": "shots",
+          "type": "int",
+          "required": false,
+          "default": "1"
+        },
+        {
+          "name": "maxRange",
+          "type": "double",
+          "required": false,
+          "default": "64"
+        },
+        {
+          "name": "wait",
+          "type": "bool",
+          "required": false,
+          "default": "true"
+        }
+      ],
+      "result": "{kind,entityId,fired,hits,damage,killed,stopped,detail?,ticks} — or {started,kind,entityId} with wait:false, where the same shape arrives as the combatDone event"
+    },
+    {
+      "name": "meleeWhile",
+      "summary": "swing at an entity on the attack-cooldown cadence while it is in reach — resolves the damageable part of a multi-part entity {entityId, maxMs?=5000, reach?=3.5, stopBelowHealth?, wait?=true}",
+      "args": [
+        {
+          "name": "entityId",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "maxMs",
+          "type": "int",
+          "required": false,
+          "default": "5000"
+        },
+        {
+          "name": "reach",
+          "type": "double",
+          "required": false,
+          "default": "3.5"
+        },
+        {
+          "name": "stopBelowHealth",
+          "type": "double",
+          "required": false
+        },
+        {
+          "name": "wait",
+          "type": "bool",
+          "required": false,
+          "default": "true"
+        }
+      ],
+      "result": "{kind,entityId,fired,hits,damage,killed,stopped,detail?,ticks} — or {started,kind,entityId} with wait:false"
+    },
+    {
+      "name": "combat.stop",
+      "summary": "stop a running shootAt/meleeWhile — a part-drawn bow is released, not abandoned, because the protocol has no way to cancel a use",
+      "args": [],
+      "result": "{stopped,kind?}"
+    },
+    {
+      "name": "combat.status",
+      "summary": "whether a combat loop currently owns the body",
+      "args": [],
+      "result": "{busy,kind?}"
+    },
+    {
       "name": "container",
       "summary": "read the open container: slots, cursor, and villager trades",
       "args": [],
@@ -995,7 +1084,7 @@
     },
     {
       "name": "equip",
-      "summary": "shift-click an item from inventory (armor/shield auto-equips) {item}",
+      "summary": "wear or hold an item from the inventory — already in its equipment slot is a no-op ({changed:false}), not an undress {item}",
       "args": [
         {
           "name": "item",
@@ -1003,7 +1092,7 @@
           "required": true
         }
       ],
-      "result": "{equipped,fromSlot}"
+      "result": "{equipped,changed,slot?,fromSlot?} — changed:false means it was already worn and nothing was clicked"
     },
     {
       "name": "moveToHotbar",
@@ -1562,6 +1651,57 @@
       ]
     },
     {
+      "name": "combatDone",
+      "description": "a shootAt / meleeWhile finished. 'stopped' is done | dead | gone | timeout | range | health | blocked | out_of_ammo | cancelled | replaced. 'hits' is melee swings for meleeWhile, and for shootAt the number of times the target's health dropped during the run — evidence, not a hit registry, since damage from any source counts",
+      "fields": [
+        {
+          "name": "kind",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "entityId",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "fired",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "hits",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "damage",
+          "type": "double",
+          "required": true
+        },
+        {
+          "name": "killed",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "stopped",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "detail",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "ticks",
+          "type": "int",
+          "required": true
+        }
+      ]
+    },
+    {
       "name": "nav.done",
       "description": "the bot reached its goto goal",
       "fields": [
@@ -1734,6 +1874,10 @@
     {
       "code": "NOT_FOUND",
       "meaning": "the requested target was not found"
+    },
+    {
+      "code": "MISSING_ITEM",
+      "meaning": "the inventory is missing an item the action needs"
     },
     {
       "code": "RATE_LIMIT",

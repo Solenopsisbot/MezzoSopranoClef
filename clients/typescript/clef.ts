@@ -30,6 +30,7 @@ export type EventName =
   | "connected" | "disconnected" | "tick" | "screenOpen" | "screenClose"
   | "entitySpawn" | "entityRemove" | "entityHurt" | "itemPickup" | "inventory"
   | "blockUpdate" | "explosion" | "weather" | "time" | "sleep" | "title" | "mineDone"
+  | "combatDone"
   | "nav.done" | "nav.failed" | "nav.progress" | "baritone.log"
   | "auth.prompt" | "auth.ok" | "auth.error";
 
@@ -48,6 +49,29 @@ export type NavVerdict = "reachable" | "unreachable" | "unknown";
 
 /** The closed set the `chat` event's `kind` field takes since protocol 2. */
 export type ChatKind = "chat" | "system" | "whisper" | "team" | "actionbar";
+
+/** Why a `shootAt`/`meleeWhile` ended. `done` is the only one that means "ran to completion". */
+export type CombatStop =
+  | "done" | "dead" | "gone" | "timeout" | "range" | "health"
+  | "blocked" | "out_of_ammo" | "cancelled" | "replaced";
+
+/**
+ * The outcome of a combat loop, returned by `shootAt`/`meleeWhile` and pushed as `combatDone`.
+ *
+ * `hits` is melee swings for `meleeWhile`; for `shootAt` it counts the times the target's health
+ * dropped during the run, which includes damage from anything else that was hitting it.
+ */
+export interface CombatResult {
+  kind: "shootAt" | "meleeWhile";
+  entityId: number;
+  fired: number;
+  hits: number;
+  damage: number;
+  killed: boolean;
+  stopped: CombatStop;
+  detail?: string;
+  ticks: number;
+}
 
 export interface ClefOptions {
   host?: string;          // default 127.0.0.1
@@ -199,17 +223,23 @@ export class ClefClient {
   }
 
   /** Send `cmd` with `args`; resolves with `result`, rejects with {@link ClefError} on `ok:false`. */
-  call<T = any>(cmd: string, args: Record<string, any> = {}): Promise<T> {
+  /**
+   * @param timeoutMs overrides the client default for this call only — needed by the commands that
+   *                  deliberately take a while (`screenshot`, `mine {wait}`, `shootAt`,
+   *                  `meleeWhile`), which can outlast the 30 s default on their own.
+   */
+  call<T = any>(cmd: string, args: Record<string, any> = {}, timeoutMs?: number): Promise<T> {
     const ws = this.ws;
     if (!ws || ws.readyState !== ws.OPEN) {
       return Promise.reject(new ClefError("NOT_CONNECTED", "not connected — call connect() first", cmd));
     }
     const mid = String(++this.id);
+    const limit = timeoutMs ?? this.timeoutMs;
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(mid);
-        reject(new ClefError("COMMAND_FAILED", `timeout after ${this.timeoutMs}ms`, cmd));
-      }, this.timeoutMs);
+        reject(new ClefError("COMMAND_FAILED", `timeout after ${limit}ms`, cmd));
+      }, limit);
       this.pending.set(mid, {
         resolve,
         reject: (e) => reject(e instanceof ClefError ? new ClefError(e.code, e.detail, cmd) : e),
@@ -302,6 +332,49 @@ export class ClefClient {
   use(hand?: string) { return this.call("use", prune({ hand })); }
   attack(entityId?: number) { return this.call("attack", prune({ entityId })); }
   setSlot(slot: number) { return this.call("setSlot", { slot }); }
+
+  // ---- combat loops that run on the bot --------------------------------------------
+
+  /**
+   * Loose arrows at an entity, with the tracking loop running on the bot at 20 Hz: it solves the
+   * lead from the target's real motion and the drop from a real arrow simulation, and sets the
+   * rotation on the release tick. Aiming from out here costs about 1.5 s a shot, which is long
+   * enough for anything mobile to have left.
+   *
+   * Resolves when the last arrow has landed. Pass `wait: false` to get control straight back and
+   * take the outcome from the `combatDone` event.
+   */
+  shootAt(entityId: number, opts: { shots?: number; lead?: boolean; charge?: number;
+                                    maxRange?: number; wait?: boolean } = {}) {
+    const shots = opts.shots ?? 1;
+    const charge = opts.charge ?? 25;
+    return this.call<CombatResult>("shootAt", prune({ entityId, ...opts }),
+      (shots * (charge + 25) + 80) * 50 + 10000);
+  }
+
+  /**
+   * Swing at an entity on the attack-cooldown cadence while it stays in reach. Resolves the
+   * damageable part of a multi-part entity, which is the only way to hurt an ender dragon — the
+   * parent entity ignores damage outright.
+   */
+  meleeWhile(entityId: number, opts: { maxMs?: number; reach?: number; stopBelowHealth?: number;
+                                       wait?: boolean } = {}) {
+    return this.call<CombatResult>("meleeWhile", prune({ entityId, ...opts }),
+      (opts.maxMs ?? 5000) + 10000);
+  }
+
+  /** Take the body back from a running `shootAt`/`meleeWhile`. */
+  combatStop() { return this.call<{ stopped: boolean; kind?: string }>("combat.stop"); }
+  combatStatus() { return this.call<{ busy: boolean; kind?: string }>("combat.status"); }
+
+  /**
+   * Wear or hold an item. Already in its equipment slot is a no-op (`changed: false`) —
+   * re-equipping worn armour does not take it off.
+   */
+  equip(item: string) {
+    return this.call<{ equipped: string; changed: boolean; slot?: string; fromSlot?: number }>(
+      "equip", { item });
+  }
   inventory() { return this.call("inventory"); }
   /** Nearby entities with health, hostility, held item and trade data. `kinds` filters by type id. */
   entities(radius?: number, kinds?: string[]) { return this.call<any[]>("entities", prune({ radius, kinds })); }

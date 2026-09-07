@@ -75,6 +75,10 @@ class ClefClient:
         self._sock: Optional[socket.socket] = None
         self._events: Deque[Tuple[str, Any]] = deque()
         self._id = 0
+        # Bytes read past the end of the HTTP handshake. The server sends `welcome` the instant it
+        # upgrades, so on a local socket the response headers and the first frame routinely arrive
+        # in the same read — and anything not kept here is a frame silently thrown away.
+        self._rx = b""
 
     # ---- connection lifecycle -------------------------------------------------------
 
@@ -106,6 +110,7 @@ class ClefClient:
             raise ConnectionError("Sec-WebSocket-Accept mismatch")
         s.settimeout(self.timeout)
         self._sock = s
+        self._rx = data.split(b"\r\n\r\n", 1)[1]
 
         # The server sends a welcome event first; capture the protocol version.
         name, payload = self._read_frame()
@@ -163,6 +168,7 @@ class ClefClient:
                 self._sock.close()
             finally:
                 self._sock = None
+                self._rx = b""
 
     def __enter__(self) -> "ClefClient":
         return self.connect()
@@ -174,22 +180,34 @@ class ClefClient:
 
     def call(self, cmd: str, timeout: Optional[float] = None, **args: Any) -> Any:
         """Send ``cmd`` with ``args`` and return its ``result``. Raises :class:`ClefError` on
-        ``ok:false``. Event frames that arrive while waiting are buffered for :meth:`events`."""
+        ``ok:false``. Event frames that arrive while waiting are buffered for :meth:`events`.
+
+        ``timeout`` raises the socket read timeout for this call only, which the commands that
+        deliberately take a while (``screenshot``, ``mine wait``, ``shootAt``, ``meleeWhile``) need:
+        the connection default is 30 s and a volley of arrows is longer than that. It bounds each
+        read, not the whole call, same as :meth:`poll_event`."""
         if self._sock is None:
             raise ConnectionError("not connected — call connect() first")
         self._id += 1
         mid = str(self._id)
         self._send_text(json.dumps({"id": mid, "cmd": cmd, "args": args}))
-        while True:
-            name, payload = self._read_frame()
-            if name is not None:  # an event arrived first; stash and keep waiting
-                self._events.append((name, payload))
-                continue
-            if payload.get("id") != mid:
-                continue
-            if not payload.get("ok"):
-                raise ClefError(payload.get("code", "COMMAND_FAILED"), payload.get("error", ""), cmd)
-            return payload.get("result")
+        previous = self._sock.gettimeout()
+        if timeout is not None:
+            self._sock.settimeout(timeout)
+        try:
+            while True:
+                name, payload = self._read_frame()
+                if name is not None:  # an event arrived first; stash and keep waiting
+                    self._events.append((name, payload))
+                    continue
+                if payload.get("id") != mid:
+                    continue
+                if not payload.get("ok"):
+                    raise ClefError(payload.get("code", "COMMAND_FAILED"), payload.get("error", ""), cmd)
+                return payload.get("result")
+        finally:
+            if timeout is not None and self._sock is not None:
+                self._sock.settimeout(previous)
 
     # ---- events ---------------------------------------------------------------------
 
@@ -329,6 +347,48 @@ class ClefClient:
     def block_at(self, x: int, y: int, z: int) -> Dict[str, Any]:
         return self.call("blockAt", x=x, y=y, z=z)
 
+    # ---- combat loops that run on the bot --------------------------------------------
+
+    def shoot_at(self, entity_id: int, shots: int = 1, lead: bool = True, charge: int = 25,
+                 max_range: float = 64.0, wait: bool = True,
+                 timeout: Optional[float] = None) -> Dict[str, Any]:
+        """Loose arrows at an entity, with the tracking loop running on the bot at 20 Hz.
+
+        Blocks until the last arrow has landed and returns
+        ``{fired, hits, damage, killed, stopped, ...}``. Aiming from out here instead costs about
+        1.5 s a shot, which is enough for anything mobile to have left. Pass ``wait=False`` to get
+        control straight back and take the outcome from the ``combatDone`` event, or use a second
+        connection so ``combat_stop`` can interrupt it."""
+        if timeout is None:
+            timeout = (shots * (charge + 25) + 80) * 0.05 + 10
+        return self.call("shootAt", timeout=timeout, entityId=entity_id, shots=shots, lead=lead,
+                         charge=charge, maxRange=max_range, wait=wait)
+
+    def melee_while(self, entity_id: int, max_ms: int = 5000, reach: float = 3.5,
+                    stop_below_health: Optional[float] = None, wait: bool = True,
+                    timeout: Optional[float] = None) -> Dict[str, Any]:
+        """Swing at an entity on the attack-cooldown cadence while it stays in reach.
+
+        Resolves the damageable part of a multi-part entity, which is the only way to hurt an ender
+        dragon — the parent entity ignores damage entirely."""
+        args: Dict[str, Any] = {"entityId": entity_id, "maxMs": max_ms, "reach": reach, "wait": wait}
+        if stop_below_health is not None:
+            args["stopBelowHealth"] = stop_below_health
+        return self.call("meleeWhile", timeout=timeout if timeout is not None else max_ms / 1000 + 10,
+                         **args)
+
+    def combat_stop(self) -> Dict[str, Any]:
+        """Take the body back from a running ``shoot_at``/``melee_while``."""
+        return self.call("combat.stop")
+
+    def combat_status(self) -> Dict[str, Any]:
+        return self.call("combat.status")
+
+    def equip(self, item: str) -> Dict[str, Any]:
+        """Wear or hold an item. Already in its equipment slot is a no-op (``changed: False``) —
+        re-equipping worn armour does not take it off."""
+        return self.call("equip", item=item)
+
     def screenshot(self, timeout: float = 60.0, **opts: Any) -> bytes:
         """Render a PNG and return its raw bytes.
 
@@ -446,7 +506,8 @@ class ClefClient:
         sock = self._sock
 
         def readn(n: int) -> bytes:
-            buf = b""
+            buf = self._rx[:n]
+            self._rx = self._rx[len(buf):]
             while len(buf) < n:
                 c = sock.recv(n - len(buf))
                 if not c:
