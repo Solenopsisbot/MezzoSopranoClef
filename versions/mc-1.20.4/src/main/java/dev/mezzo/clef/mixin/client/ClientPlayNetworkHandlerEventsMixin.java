@@ -37,22 +37,26 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  * specifically so it can read the <i>outgoing</i> block state before the packet overwrites it —
  * that's what makes the {@code from} field possible.
  */
+// No `require = 0` on these injections. Every handler below exists on every release that
+// carries this mixin (verified with scripts/mcjavap.sh across 1.20.1 .. 26.2), and `require = 0`
+// means a target that stops matching is silently skipped — subscribe still succeeds and no event
+// ever arrives. Letting mixin fail loudly is the whole point of defaultRequire.
 @Mixin(ClientPacketListener.class)
 public abstract class ClientPlayNetworkHandlerEventsMixin {
 
-    @Inject(method = "handleBlockUpdate", at = @At("HEAD"), require = 0)
+    @Inject(method = "handleBlockUpdate", at = @At("HEAD"))
     private void clef$onBlockUpdate(ClientboundBlockUpdatePacket packet, CallbackInfo ci) {
         if (!Events.wants("blockUpdate")) return;
         clef$emitBlockUpdate(packet.getPos(), packet.getBlockState());
     }
 
-    @Inject(method = "handleChunkBlocksUpdate", at = @At("HEAD"), require = 0)
+    @Inject(method = "handleChunkBlocksUpdate", at = @At("HEAD"))
     private void clef$onChunkDeltaUpdate(ClientboundSectionBlocksUpdatePacket packet, CallbackInfo ci) {
         if (!Events.wants("blockUpdate")) return;
         packet.runUpdates(this::clef$emitBlockUpdate);
     }
 
-    @Inject(method = "handleTakeItemEntity", at = @At("HEAD"), require = 0)
+    @Inject(method = "handleTakeItemEntity", at = @At("HEAD"))
     private void clef$onItemPickup(ClientboundTakeItemEntityPacket packet, CallbackInfo ci) {
         if (!Events.wants("itemPickup")) return;
         Minecraft mc = Minecraft.getInstance();
@@ -66,7 +70,7 @@ public abstract class ClientPlayNetworkHandlerEventsMixin {
         Events.emit("itemPickup", data);
     }
 
-    @Inject(method = "handleDamageEvent", at = @At("HEAD"), require = 0)
+    @Inject(method = "handleDamageEvent", at = @At("HEAD"))
     private void clef$onEntityDamage(ClientboundDamageEventPacket packet, CallbackInfo ci) {
         if (!Events.wants("entityHurt")) return;
         Minecraft mc = Minecraft.getInstance();
@@ -104,7 +108,7 @@ public abstract class ClientPlayNetworkHandlerEventsMixin {
         Events.emit("entityHurt", data);
     }
 
-    @Inject(method = "handleExplosion", at = @At("HEAD"), require = 0)
+    @Inject(method = "handleExplosion", at = @At("HEAD"))
     private void clef$onExplosion(ClientboundExplodePacket packet, CallbackInfo ci) {
         if (!Events.wants("explosion")) return;
         Minecraft mc = Minecraft.getInstance();
