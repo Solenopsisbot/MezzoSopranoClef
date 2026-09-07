@@ -247,7 +247,17 @@ def main():
     # subscribe ack. The mixin only exists from 1.20.1 up; older targets skip with a note.
     native = (st.get("protocol") or {}).get("native") or ""
     if version_key(native) >= version_key("1.20.1"):
+        # Read the position fresh, and only once the bot has stopped falling. The world check can
+        # pass while it is still descending to the flat-world floor, and a stale position puts the
+        # target block a hundred blocks away — outside events.blockUpdateRadius, so the client
+        # correctly suppresses the event and the assertion wrongly blames the mixin.
+        settled = time.time() + 30
         pos = st["player"]
+        while time.time() < settled:
+            pos = (call(s, "status").get("player") or pos)
+            if pos.get("onGround"):
+                break
+            time.sleep(1)
         bx, by, bz = int(pos["x"]) + 2, int(pos["y"]) - 1, int(pos["z"])
         # Retry with a different block each time. A client starved of CPU (a full matrix run has a
         # server, a game and Gradle competing) can be slow enough to miss a 30s window, and reusing
