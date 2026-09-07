@@ -85,6 +85,7 @@ public final class EventEmitter {
         this.config = config;
         services.navigator.setListener(new NavBridge());
         services.actions.setMineListener(this::onMineDone);
+        services.combat.setDoneListener(this::onCombatDone);
     }
 
     /** Forgets all diff state, so a rejoin doesn't emit a flood of spurious "changed" events. */
@@ -433,6 +434,11 @@ public final class EventEmitter {
         if (result.detail() != null) data.addProperty("detail", result.detail());
         data.addProperty("ticks", result.ticks());
         control.emitEvent("mineDone", data);
+    }
+
+    private void onCombatDone(CombatController.Result result) {
+        if (!control.hasSubscribers("combatDone")) return;
+        control.emitEvent("combatDone", result.toJson());
     }
 
     /** Turns navigator completions into {@code nav.done} / {@code nav.failed}. */

@@ -200,7 +200,10 @@ public final class ClefClient implements ClientModInitializer {
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
             if (control != null) control.emitEvent("disconnected", new JsonObject());
             if (eventEmitter != null) eventEmitter.reset();
-            if (services != null) services.craft.cancel("screen_changed");
+            if (services != null) {
+                services.craft.cancel("screen_changed");
+                services.combat.cancel("disconnected");
+            }
         });
     }
 
@@ -220,6 +223,9 @@ public final class ClefClient implements ClientModInitializer {
         services.input.tick(mc);
         services.actions.tick(mc);
         services.use.tick(mc);
+        // After `use`, because a combat loop owns the use key outright while it is drawing a bow
+        // and must not have a stale `useHold` unpress it half a tick before the release.
+        services.combat.tick(mc);
         services.craft.tick(mc);
         eventEmitter.tick(mc);
 

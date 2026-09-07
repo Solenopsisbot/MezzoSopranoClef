@@ -227,6 +227,13 @@ def main():
     print(f"[verify] in world at {status['player']['x']:.1f},"
           f"{status['player']['y']:.1f},{status['player']['z']:.1f}")
 
+    # "In a world" and "finished loading it" are not the same thing. While
+    # DownloadingTerrainScreen is up, MinecraftClient skips the entire input path, so anything that
+    # holds a key — shootAt drawing a bow, useHold — silently does nothing. Wait for the screen to
+    # clear rather than racing it.
+    while call(s, "status").get("screen") != "none" and time.time() < end:
+        time.sleep(1)
+
     call(s, "subscribe")   # everything; the event checks below filter what they need
     schema = call(s, "schema")
 
@@ -293,6 +300,17 @@ def main():
     check("blockUpdate fires for a nearby change", lambda: event_block_update(s))
     check("time/weather/title/inventory events are declared", lambda: events_declared(schema))
     check("entityHurt names the victim", lambda: event_entity_hurt(s))
+
+    print("\n[verify] combat loops")
+    check("combat.status reports an idle body", lambda: combat_idle(s))
+    check("shootAt validates its arguments", lambda: shoot_bad_args(s))
+    check("shootAt reports NOT_FOUND for an entity that isn't there", lambda: shoot_no_entity(s))
+    check("entities carries per-tick motion as vx/vy/vz", lambda: entity_motion(s))
+    check("shootAt looses the arrows it was asked for", lambda: shoot_at_a_pig(s))
+    check("meleeWhile swings while the target is in reach", lambda: melee_a_pig(s))
+
+    print("\n[verify] equipment")
+    check("equipping worn armour a second time does not undress", lambda: equip_idempotent(s))
 
     print("\n[verify] screenshots")
     check("perspective capture returns a PNG", lambda: shot_normal(s))
@@ -733,7 +751,8 @@ def event_block_update(s):
 def events_declared(schema):
     names = {e["name"] for e in schema["events"]}
     expected = {"blockUpdate", "itemPickup", "inventory", "entityHurt", "explosion",
-                "weather", "time", "sleep", "title", "mineDone", "nav.done", "nav.failed"}
+                "weather", "time", "sleep", "title", "mineDone", "nav.done", "nav.failed",
+                "combatDone"}
     missing = expected - names
     assert not missing, f"schema is missing {missing}"
     return f"{len(names)} events declared"
@@ -751,6 +770,141 @@ def event_entity_hurt(s):
     assert "id" in hurts[0] and "type" in hurts[0] and "self" in hurts[0], hurts[0]
     call(s, "chat", message="/kill @e[type=pig]")
     return f"{hurts[0]['type']} hurt, health now {hurts[0].get('health')}"
+
+
+# ---- combat and equipment ---------------------------------------------------------------
+
+
+def give(s, item, count=1):
+    """Hands the bot an item, returning False when the server refused (no op)."""
+    call(s, "chat", message=f"/give @s {item} {count}")
+    time.sleep(0.6)
+    return call(s, "findItem", item=item)["total"] >= count
+
+
+def summon_pig(s, dz):
+    """A pig `dz` blocks north of the bot, or None when /summon was denied."""
+    call(s, "chat", message=f"/summon minecraft:pig ~ ~ ~{dz}")
+    time.sleep(1.0)
+    pigs = call(s, "entities", radius=dz + 10, kinds=["pig"])
+    return pigs[0] if pigs else None
+
+
+def kill_pigs(s):
+    call(s, "chat", message="/kill @e[type=pig]")
+
+
+def combat_idle(s):
+    status = call(s, "combat.status")
+    assert status["busy"] is False, status
+    stop = call(s, "combat.stop")
+    assert stop["stopped"] is False, f"stopped something that wasn't running: {stop}"
+    return "idle, and combat.stop is honest about it"
+
+
+def shoot_bad_args(s):
+    for args, why in (({"entityId": 1, "shots": 0}, "zero shots"),
+                      ({"entityId": 1, "charge": 0}, "zero charge"),
+                      ({"entityId": 1, "maxRange": 0}, "zero range")):
+        try:
+            call(s, "shootAt", **args)
+            raise AssertionError(f"{why} was accepted")
+        except RuntimeError as e:
+            assert "BAD_ARGS" in str(e), f"{why} gave {e}"
+    return "zero shots/charge/range all rejected as BAD_ARGS"
+
+
+def shoot_no_entity(s):
+    try:
+        call(s, "shootAt", entityId=2_000_000_000)
+    except RuntimeError as e:
+        assert "NOT_FOUND" in str(e), e
+        return "NOT_FOUND"
+    raise AssertionError("shot at an entity that does not exist")
+
+
+def entity_motion(s):
+    """vx/vy/vz must be present, numeric, and agree with the `velocity` array."""
+    entities = call(s, "entities", radius=48)
+    if not entities:
+        if summon_pig(s, 4) is None:
+            raise Skip("nothing nearby and /summon was denied (needs op)")
+        entities = call(s, "entities", radius=48)
+    if not entities:
+        raise Skip("no entities to inspect")
+    moving = 0
+    for e in entities:
+        for field in ("vx", "vy", "vz"):
+            assert field in e, f"{e['type']} is missing {field}: {e}"
+            assert isinstance(e[field], (int, float)), f"{field} is not a number: {e[field]}"
+        assert e["velocity"] == [e["vx"], e["vy"], e["vz"]], \
+            f"velocity array disagrees with the scalars: {e}"
+        if abs(e["vx"]) + abs(e["vy"]) + abs(e["vz"]) > 1e-6:
+            moving += 1
+    return f"{len(entities)} entities, {moving} of them in motion"
+
+
+def shoot_at_a_pig(s):
+    if not give(s, "minecraft:bow") or not give(s, "minecraft:arrow", 16):
+        raise Skip("/give was denied (needs op)")
+    pig = summon_pig(s, 12)
+    if pig is None:
+        raise Skip("/summon was denied (needs op)")
+    try:
+        # Blocks for the whole volley: that is the point of moving the loop onto the bot.
+        result = call(s, "shootAt", entityId=pig["id"], shots=2, maxRange=48)
+    finally:
+        kill_pigs(s)
+    assert result["kind"] == "shootAt", result
+    assert result["stopped"] in ("done", "dead"), result
+    # Fewer arrows than asked for is only legitimate if the target stopped existing: a fully drawn
+    # bow does up to 10 damage and a pig has exactly that much, so a clean first shot ends the
+    # volley. Anything else short of `shots` is the loop giving up.
+    assert 1 <= result["fired"] <= 2, f"wrong number of arrows: {result}"
+    assert result["fired"] == 2 or result["killed"], f"stopped short without a kill: {result}"
+    return (f"fired {result['fired']} in {result['ticks']} ticks, stopped={result['stopped']}, "
+            f"damage={result['damage']}, killed={result['killed']}")
+
+
+def melee_a_pig(s):
+    pig = summon_pig(s, 1)
+    if pig is None:
+        raise Skip("/summon was denied (needs op)")
+    try:
+        result = call(s, "meleeWhile", entityId=pig["id"], maxMs=4000, reach=4.5)
+    finally:
+        kill_pigs(s)
+    assert result["kind"] == "meleeWhile", result
+    assert result["hits"] > 0, f"never got a swing in: {result}"
+    # Swinging is not the claim; connecting is. Damage-attribution is not visible from the client,
+    # but nothing else is hitting a pig that was summoned a second ago.
+    assert result["damage"] > 0, f"swung {result['hits']} times and hurt nothing: {result}"
+    assert result["stopped"] in ("dead", "timeout"), result
+    return (f"{result['hits']} swings for {result['damage']} damage, killed={result['killed']}, "
+            f"stopped={result['stopped']}")
+
+
+def equip_idempotent(s):
+    if not give(s, "minecraft:iron_chestplate"):
+        raise Skip("/give was denied (needs op)")
+    # Start bare, or a bot that is already wearing one from an earlier run makes the first equip a
+    # legitimate no-op and the check reads as a failure.
+    call(s, "chat", message="/item replace entity @s armor.chest with minecraft:air")
+    time.sleep(0.5)
+    first = call(s, "equip", item="minecraft:iron_chestplate")
+    assert first["changed"] is True, first
+    time.sleep(0.5)
+    worn = call(s, "status")["player"]["armor"]
+    assert worn[1] == "minecraft:iron_chestplate", f"never got worn: {worn}"
+
+    # The regression: `equip` is a shift-click, and shift-clicking a worn piece takes it off.
+    second = call(s, "equip", item="minecraft:iron_chestplate")
+    assert second["changed"] is False, f"clicked again instead of no-op: {second}"
+    assert second.get("slot") == "chest", second
+    time.sleep(0.5)
+    still = call(s, "status")["player"]["armor"]
+    assert still[1] == "minecraft:iron_chestplate", f"re-equipping undressed the bot: {still}"
+    return "worn once, no-op the second time, still worn"
 
 
 def shot(s, **kw):

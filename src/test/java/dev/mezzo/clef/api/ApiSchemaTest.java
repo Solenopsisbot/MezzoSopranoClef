@@ -6,6 +6,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import dev.mezzo.clef.api.commands.ActionCommands;
+import dev.mezzo.clef.api.commands.CombatCommands;
 import dev.mezzo.clef.api.commands.CoreCommands;
 import dev.mezzo.clef.api.commands.CraftCommands;
 import dev.mezzo.clef.api.commands.UiCommands;
@@ -34,6 +35,7 @@ class ApiSchemaTest {
         UiCommands.registerAll(d);
         WorldCommands.registerAll(d);
         CraftCommands.registerAll(d);
+        CombatCommands.registerAll(d);
         return d;
     }
 

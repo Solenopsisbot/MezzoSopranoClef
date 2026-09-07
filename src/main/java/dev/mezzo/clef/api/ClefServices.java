@@ -2,6 +2,7 @@ package dev.mezzo.clef.api;
 
 import dev.mezzo.clef.bot.ActionManager;
 import dev.mezzo.clef.bot.ChatLog;
+import dev.mezzo.clef.bot.CombatController;
 import dev.mezzo.clef.bot.CraftManager;
 import dev.mezzo.clef.bot.InputController;
 import dev.mezzo.clef.bot.UseController;
@@ -20,9 +21,11 @@ public final class ClefServices {
     public final UseController use;
     public final CraftManager craft;
     public final ChatLog chatLog;
+    public final CombatController combat;
 
     public ClefServices(ScreenshotService screenshots, Navigator navigator, InputController input,
-                        ActionManager actions, UseController use, CraftManager craft, ChatLog chatLog) {
+                        ActionManager actions, UseController use, CraftManager craft, ChatLog chatLog,
+                        CombatController combat) {
         this.screenshots = screenshots;
         this.navigator = navigator;
         this.input = input;
@@ -30,6 +33,7 @@ public final class ClefServices {
         this.use = use;
         this.craft = craft;
         this.chatLog = chatLog;
+        this.combat = combat;
     }
 
     /**
@@ -37,8 +41,10 @@ public final class ClefServices {
      * go through this, so adding a subsystem doesn't mean editing a dozen construction sites.
      */
     public static ClefServices standard(ClefConfig config) {
+        ActionManager actions = new ActionManager();
         return new ClefServices(new ScreenshotService(config), new BaritoneNavigator(),
-                new InputController(), new ActionManager(), new UseController(),
-                new CraftManager(), new ChatLog(config.events.chatHistory));
+                new InputController(), actions, new UseController(),
+                new CraftManager(), new ChatLog(config.events.chatHistory),
+                new CombatController(actions));
     }
 }

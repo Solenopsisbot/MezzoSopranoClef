@@ -162,8 +162,11 @@ public final class ApiSchema {
             c("dropItem").opt("all", Type.BOOL).result("{dropped}"),
             c("inventory").result("{selectedSlot,items:[{slot,item,name,count}]}"),
             c("entities").opt("radius", Type.DOUBLE, "16").opt("kinds", Type.STRING_ARRAY)
-                    .result("[{id,type,name,x,y,z,distance,velocity,onFire,health?,maxHealth?,armor?,baby?,"
-                            + "held?,lookingAtMe?,hostile,targetingMe,item?,villager?,owner?}]"),
+                    .result("[{id,type,name,x,y,z,distance,vx,vy,vz,velocity:[vx,vy,vz],onFire,health?,"
+                            + "maxHealth?,armor?,baby?,held?,lookingAtMe?,hostile,targetingMe,item?,"
+                            + "villager?,owner?}] — vx/vy/vz are blocks per tick as the client "
+                            + "observed the entity move, not the raw velocity field, which is zero "
+                            + "for anything the server drives"),
             c("blockAt").req("x", Type.INT).req("y", Type.INT).req("z", Type.INT).result("{block,air}"),
             c("findBlocks").req("ids", Type.STRING_ARRAY).opt("radius", Type.INT, "32")
                     .opt("max", Type.INT, "32").opt("sort", Type.STRING, "nearest")
@@ -192,6 +195,21 @@ public final class ApiSchema {
                             + "width?,height?,station?}]"),
             c("craftable").result("{grid,knownRecipes,items:[{item,count,fitsOpenGrid}]}"),
 
+            // --- combat loops that run on the body, at 20 Hz ---
+            c("shootAt").req("entityId", Type.INT).opt("lead", Type.BOOL, "true")
+                    .opt("charge", Type.INT, "25").opt("shots", Type.INT, "1")
+                    .opt("maxRange", Type.DOUBLE, "64").opt("wait", Type.BOOL, "true")
+                    .result("{kind,entityId,fired,hits,damage,killed,stopped,detail?,ticks} — or "
+                            + "{started,kind,entityId} with wait:false, where the same shape arrives "
+                            + "as the combatDone event"),
+            c("meleeWhile").req("entityId", Type.INT).opt("maxMs", Type.INT, "5000")
+                    .opt("reach", Type.DOUBLE, "3.5").opt("stopBelowHealth", Type.DOUBLE)
+                    .opt("wait", Type.BOOL, "true")
+                    .result("{kind,entityId,fired,hits,damage,killed,stopped,detail?,ticks} — or "
+                            + "{started,kind,entityId} with wait:false"),
+            c("combat.stop").result("{stopped,kind?}"),
+            c("combat.status").result("{busy,kind?}"),
+
             // --- containers / screens / inventory transfer ---
             c("container").result("{handler,syncId,screen,screenClass,slots,cursor,trades?}"),
             c("clickSlot").req("slot", Type.INT).opt("button", Type.INT, "0")
@@ -203,7 +221,9 @@ public final class ApiSchema {
             c("setText").req("index", Type.INT).opt("text", Type.STRING, "").result("{set}"),
             c("serverui").result("{title,bossBars,scoreboards,sidebar}"),
             c("findItem").req("item", Type.STRING).result("{total,slots:[{slot,count}]}"),
-            c("equip").req("item", Type.STRING).result("{equipped,fromSlot}"),
+            c("equip").req("item", Type.STRING)
+                    .result("{equipped,changed,slot?,fromSlot?} — changed:false means it was already "
+                            + "worn and nothing was clicked"),
             c("moveToHotbar").req("item", Type.STRING).opt("slot", Type.INT).result("{slot,moved,fromSlot}"),
             c("deposit").req("item", Type.STRING).result("{deposited}"),
             c("withdraw").req("item", Type.STRING).result("{withdrew}"),
@@ -265,6 +285,14 @@ public final class ApiSchema {
             e("mineDone", "a mine request finished; reason is cant_break | cancelled | replaced | not_in_world")
                     .f("x", Type.INT).f("y", Type.INT).f("z", Type.INT).f("broken", Type.BOOL)
                     .opt("reason", Type.STRING).opt("detail", Type.STRING).f("ticks", Type.INT),
+            e("combatDone", "a shootAt / meleeWhile finished. 'stopped' is done | dead | gone | "
+                    + "timeout | range | health | blocked | out_of_ammo | cancelled | replaced. "
+                    + "'hits' is melee swings for meleeWhile, and for shootAt the number of times "
+                    + "the target's health dropped during the run — evidence, not a hit registry, "
+                    + "since damage from any source counts")
+                    .f("kind", Type.STRING).f("entityId", Type.INT).f("fired", Type.INT)
+                    .f("hits", Type.INT).f("damage", Type.DOUBLE).f("killed", Type.BOOL)
+                    .f("stopped", Type.STRING).opt("detail", Type.STRING).f("ticks", Type.INT),
             e("nav.done", "the bot reached its goto goal")
                     .f("x", Type.INT).opt("y", Type.INT).f("z", Type.INT).f("reach", Type.INT),
             e("nav.failed", "the goal is over and was NOT reached. Always terminal — no nav.done can "

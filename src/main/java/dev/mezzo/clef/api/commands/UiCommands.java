@@ -14,6 +14,9 @@ import net.minecraft.client.gui.Element;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.widget.ClickableWidget;
 import net.minecraft.client.gui.widget.TextFieldWidget;
+import net.minecraft.entity.EquipmentSlot;
+import net.minecraft.entity.player.PlayerEntity;
+import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.item.ItemStack;
 import net.minecraft.network.packet.c2s.play.SelectMerchantTradeC2SPacket;
 import net.minecraft.registry.Registries;
@@ -244,25 +247,47 @@ public final class UiCommands {
             });
         });
 
-        d.register("equip", "shift-click an item from inventory (armor/shield auto-equips) {item}", ctx -> {
-            String q = ctx.requireStr("item");
-            return ctx.onMain(() -> {
-                MinecraftClient mc = MinecraftClient.getInstance();
-                if (mc.player == null || mc.interactionManager == null) throw ApiException.notInWorld();
-                ScreenHandler h = mc.player.currentScreenHandler;
-                Object playerInv = mc.player.getInventory();
-                for (Slot s : h.slots) {
-                    if (s.inventory == playerInv && idMatches(s.getStack(), q)) {
-                        mc.interactionManager.clickSlot(h.syncId, s.id, 0, SlotActionType.QUICK_MOVE, mc.player);
-                        JsonObject o = new JsonObject();
-                        o.addProperty("equipped", q);
-                        o.addProperty("fromSlot", s.id);
-                        return o;
-                    }
-                }
-                throw ApiException.notFound("no '" + q + "' in inventory");
-            });
-        });
+        d.register("equip",
+                "wear or hold an item from the inventory — already in its equipment slot is a no-op "
+                        + "({changed:false}), not an undress {item}",
+                ctx -> {
+                    String q = ctx.requireStr("item");
+                    return ctx.onMain(() -> {
+                        MinecraftClient mc = MinecraftClient.getInstance();
+                        if (mc.player == null || mc.interactionManager == null) throw ApiException.notInWorld();
+
+                        // Idempotence first. `equip` is a shift-click, the armour and off-hand slots
+                        // are part of the player inventory, and a shift-click on a worn piece
+                        // quick-moves it back OFF. So a mind that defensively re-equipped its armour
+                        // every turn undressed itself and fought with the gear in its bag.
+                        EquipmentSlot worn = wornSlotFor(mc.player, q);
+                        if (worn != null) {
+                            JsonObject o = new JsonObject();
+                            o.addProperty("equipped", q);
+                            o.addProperty("changed", false);
+                            o.addProperty("slot", worn.getName());
+                            return o;
+                        }
+
+                        ScreenHandler h = mc.player.currentScreenHandler;
+                        PlayerInventory inv = mc.player.getInventory();
+                        for (Slot s : h.slots) {
+                            if (s.inventory != inv || !idMatches(s.getStack(), q)) continue;
+                            // Never source from an equipment slot either: quick-moving out of one is
+                            // unequipping, whatever the caller meant by "equip".
+                            if (PlayerInventory.EQUIPMENT_SLOTS.containsKey(s.getIndex())) continue;
+                            mc.interactionManager.clickSlot(h.syncId, s.id, 0, SlotActionType.QUICK_MOVE, mc.player);
+                            JsonObject o = new JsonObject();
+                            o.addProperty("equipped", q);
+                            o.addProperty("changed", true);
+                            o.addProperty("fromSlot", s.id);
+                            EquipmentSlot now = wornSlotFor(mc.player, q);
+                            if (now != null) o.addProperty("slot", now.getName());
+                            return o;
+                        }
+                        throw ApiException.notFound("no '" + q + "' in inventory");
+                    });
+                });
 
         d.register("moveToHotbar",
                 "put an item on the hotbar and select it, swapping it in if needed {item, slot?}",
@@ -328,6 +353,22 @@ public final class UiCommands {
         JsonObject o = new JsonObject();
         o.addProperty(intoContainer ? "deposited" : "withdrew", moved);
         return o;
+    }
+
+    /**
+     * The equipment slot the player is already wearing {@code query} in, or null.
+     *
+     * <p>Covers everything with a well-defined home — armour, elytra, shield and anything else with
+     * an {@code EQUIPPABLE} component, plus the off-hand. Deliberately not the main hand: that slot
+     * is not in {@code PlayerInventory.EQUIPMENT_SLOTS}, and shift-clicking an ordinary item has
+     * never meant "hold it" ({@code moveToHotbar} is that), so the old behaviour is unchanged for
+     * anything that isn't worn.</p>
+     */
+    private static EquipmentSlot wornSlotFor(PlayerEntity player, String query) {
+        for (EquipmentSlot slot : PlayerInventory.EQUIPMENT_SLOTS.values()) {
+            if (idMatches(player.getEquippedStack(slot), query)) return slot;
+        }
+        return null;
     }
 
     private static boolean idMatches(ItemStack st, String query) {

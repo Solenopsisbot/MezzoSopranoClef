@@ -6,6 +6,9 @@ Headless Minecraft client for automation. It runs the real Fabric client, keeps 
 
 - Connects to offline or Microsoft-authenticated servers.
 - Drives movement, mining, placing, crafting, combat, inventory, containers, trades, and timed item use.
+- Fights on its own clock — `shootAt` tracks a target every tick, solves lead and arrow drop, and
+  aims on the release tick; `meleeWhile` swings on the attack cooldown and resolves the
+  damageable part of a multi-part entity.
 - Answers bulk world questions — `findBlocks` over the chunk cache (block ids or `#tags`), `blocksIn`
   for a dense cuboid, `target` for what's under the crosshair — instead of one block per round-trip.
 - Streams chat, health, death, entity, block-update, pickup, weather, time, sleep and navigation events.
@@ -34,7 +37,7 @@ Standalone and Docker builds are available with `./gradlew build :launcher:jar` 
 
 Connect to `ws://127.0.0.1:8731` and send JSON commands such as `{"cmd":"ping","args":{}}` or
 `{"cmd":"status","args":{}}`. The authoritative command and event contract is
-[clients/schema.json](clients/schema.json) — 68 commands, 30 events, protocol 2. Keep the socket on
+[clients/schema.json](clients/schema.json) — 72 commands, 33 events, protocol 2. Keep the socket on
 localhost unless it is behind TLS and configured with `control.authToken`.
 
 A tour of the parts that aren't obvious from the schema:
@@ -47,7 +50,9 @@ A tour of the parts that aren't obvious from the schema:
 | Know when you arrived | `goto {x,y,z,reach}` then the `nav.done` / `nav.failed` events; `nav.check` answers "could I?" without moving |
 | Know if the block broke | `mine {..., wait:true}`, or subscribe to `mineDone` — `cant_break` covers bedrock, the wrong tool, and giving up |
 | Know if the block was placed | `place {x,y,z,item?}` verifies the world changed instead of assuming the click worked |
-| Fight something | `entities {kinds:["zombie"]}` carries health, hostility, held item and whether it's looking at you; `entityHurt` names the attacker |
+| Fight something | `entities {kinds:["zombie"]}` carries health, hostility, held item, per-tick motion and whether it's looking at you; `entityHurt` names the attacker |
+| Actually hit it | `shootAt {entityId, shots}` and `meleeWhile {entityId, maxMs}` — the loop runs on the bot, not over the socket; `combat.stop` takes the body back |
+| Put armour on | `equip {item}` — already worn is `{changed:false}`, not an undress |
 | See the layout | `screenshot {mode:"topdown", radius:64}` for an orthographic map (east-right, north-up) |
 | Label a screenshot | `screenshot {annotate:true}` also returns the camera and each visible entity's screen-space box |
 | Save round-trips | `batch {commands:[{cmd,args}...]}` runs them in order and returns every result |
@@ -67,6 +72,26 @@ privilege.
 **Set a token even on localhost.** A running bot is a fully actuating body; anything else on the
 machine can open a socket to it. A fresh config generates a token for exactly this reason, and the
 test harnesses now generate a per-run one rather than leaving the port open.
+
+### Why combat is a command and not a script
+
+Every other command answers in one round trip. Aiming a bow doesn't. Doing it from the far end of
+the socket costs four round trips per arrow — sample, draw, sample again, aim, release — about a
+second and a half, against a world that moves twenty times a second. Measured against an ender
+dragon: hundreds of arrows, fifty-four spent shafts on the ground at once, and three points of
+damage in ten minutes.
+
+So `shootAt` and `meleeWhile` own the loop. They track the target every tick, solve the lead from
+the motion the client actually observed (not `getVelocity()`, which is zero for anything the server
+drives), solve the drop by simulating the real arrow — drag included, which the usual `10·t²` rule
+leaves out and which makes every long shot land low — and push the rotation to the server on the
+release tick, because the release packet carries no rotation of its own. `meleeWhile` resolves the
+*part* of a multi-part entity: the parent ender dragon ignores damage outright, so `/damage` on it
+reports "Applied 5.0" and changes nothing.
+
+These are the only commands that deliberately block for seconds. Pass `wait:false` to get control
+straight back and take the outcome from the `combatDone` event instead, and use `combat.stop` — from
+any connection — when a reflex needs the body.
 
 ### Two things worth knowing about Baritone
 
