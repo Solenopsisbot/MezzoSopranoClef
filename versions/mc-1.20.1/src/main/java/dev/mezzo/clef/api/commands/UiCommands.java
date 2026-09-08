@@ -14,6 +14,7 @@ import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.components.events.GuiEventListener;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.protocol.game.ServerboundSelectTradePacket;
@@ -97,13 +98,40 @@ public final class UiCommands {
                     });
                 });
 
-        d.register("closeScreen", "close the open container/screen", ctx -> ctx.onMain(() -> {
-            Minecraft mc = Minecraft.getInstance();
-            if (mc.player != null) mc.player.closeContainer();
-            JsonObject o = new JsonObject();
-            o.addProperty("closed", true);
-            return o;
-        }));
+        d.register("closeScreen",
+                "close whatever screen is open — container, pause, death, modded — and report "
+                        + "whether it actually closed",
+                ctx -> ctx.onMain(() -> {
+                    Minecraft mc = Minecraft.getInstance();
+                    Screen before = mc.screen;
+                    // A server-synced menu can be open with no screen in front of it, so "is anything
+                    // open" is both questions rather than just the screen one.
+                    boolean menu = mc.player != null && mc.player.containerMenu != mc.player.inventoryMenu;
+
+                    JsonObject o = new JsonObject();
+                    o.addProperty("screen", ScreenNames.of(before));
+                    o.addProperty("wasOpen", before != null || menu);
+
+                    // closeContainer() is the right verb for exactly one kind of screen: it sends the
+                    // close packet a server-synced menu is waiting for. Sending it for a pause or death
+                    // screen — which is what this used to do for every screen — is a spurious close of
+                    // the player's own inventory that the server has to process for nothing.
+                    if (mc.player != null && (menu || before instanceof AbstractContainerScreen<?>)) {
+                        mc.player.closeContainer();
+                    } else if (before != null) {
+                        mc.setScreen(null);
+                    }
+
+                    // Then look, instead of asserting. Closing is not always allowed to stick: with no
+                    // level, setScreen(null) hands back the title screen; while the player is dying it
+                    // hands back the death screen; and a client that believes it has lost window focus
+                    // re-opens the pause screen on the very next frame (InputController pins that option
+                    // off for exactly this reason, but a modded screen can do the same thing).
+                    Screen after = mc.screen;
+                    o.addProperty("closed", after == null);
+                    if (after != null) o.addProperty("stillOpen", ScreenNames.of(after));
+                    return o;
+                }));
 
         d.register("selectTrade", "select a villager trade by index (open the villager first) {index}", ctx -> {
             int index = ctx.requireInt("index");
@@ -247,8 +275,8 @@ public final class UiCommands {
         });
 
         d.register("equip",
-                "wear or hold an item from the inventory — already in its equipment slot is a no-op "
-                        + "({changed:false}), not an undress {item}",
+                "wear an item from the inventory — idempotent (already worn is {changed:false}, "
+                        + "not an undress) and confirmed by reading the slot back {item}",
                 ctx -> {
                     String q = ctx.requireStr("item");
                     return ctx.onMain(() -> {
@@ -264,24 +292,55 @@ public final class UiCommands {
                             JsonObject o = new JsonObject();
                             o.addProperty("equipped", q);
                             o.addProperty("changed", false);
+                            o.addProperty("worn", true);
+                            o.addProperty("moved", false);
                             o.addProperty("slot", worn.getName());
                             return o;
                         }
 
                         AbstractContainerMenu h = mc.player.containerMenu;
                         Inventory inv = mc.player.getInventory();
+                        // Every player-inventory slot holding a match is fair game. This used to
+                        // skip `s.index >= 36` so it could not quick-move something back OUT of an
+                        // equipment slot, and that was wrong twice over. `Slot.index` is the slot's
+                        // position in the *menu* — it is what the click packet carries, assigned by
+                        // AbstractContainerMenu.addSlot — not its index within the container, so the
+                        // test threw away menu slots 36-44, which in an InventoryMenu is the whole
+                        // hotbar: `equip` answered NOT_FOUND for armour the bot had just picked up
+                        // while the same armour one row up in storage worked. And it was never
+                        // needed, because the idempotence check above already returned if `q` was in
+                        // HEAD/CHEST/LEGS/FEET/OFFHAND — past that point no equipment slot is
+                        // holding one.
                         for (Slot s : h.slots) {
                             if (s.container != inv || !idMatches(s.getItem(), q)) continue;
-                            // Never source from an equipment slot either: quick-moving out of one is
-                            // unequipping, whatever the caller meant by "equip".
-                            if (s.index >= MAIN_INVENTORY_SLOTS) continue;
+                            // A shift-click is a request, not a promise. QUICK_MOVE hands the
+                            // stack to the menu's transfer rule, which sends it to an equipment
+                            // slot only if the item has one and it is free; otherwise it shuffles
+                            // it between hotbar and storage, or — with nowhere at all to go —
+                            // silently does nothing. So read the source slot before and after and
+                            // read the body back, rather than reporting the click as the outcome.
+                            int wasCount = s.getItem().getCount();
                             mc.gameMode.handleInventoryMouseClick(h.containerId, s.index, 0, ClickType.QUICK_MOVE, mc.player);
+                            EquipmentSlot now = wornSlotFor(mc.player, q);
+                            boolean moved = s.getItem().getCount() != wasCount;
+
                             JsonObject o = new JsonObject();
                             o.addProperty("equipped", q);
-                            o.addProperty("changed", true);
                             o.addProperty("fromSlot", s.index);
-                            EquipmentSlot now = wornSlotFor(mc.player, q);
-                            if (now != null) o.addProperty("slot", now.getName());
+                            // `changed` is about the body, not the bag: true only when the item is
+                            // now in an equipment slot it was not in when the command arrived.
+                            o.addProperty("changed", now != null);
+                            o.addProperty("worn", now != null);
+                            o.addProperty("moved", moved);
+                            if (now != null) {
+                                o.addProperty("slot", now.getName());
+                            } else if (moved) {
+                                o.addProperty("detail", "shift-clicked, but '" + q + "' has no armour or "
+                                        + "off-hand slot to go to — moveToHotbar is how you hold something");
+                            } else {
+                                o.addProperty("detail", "the shift-click had nowhere to put '" + q
+                                        + "' — its equipment slot is occupied, or the inventory is full");
+                            }
                             return o;
                         }
                         throw ApiException.notFound("no '" + q + "' in inventory");
@@ -353,14 +412,6 @@ public final class UiCommands {
         o.addProperty(intoContainer ? "deposited" : "withdrew", moved);
         return o;
     }
-
-    /**
-     * Player inventory indices 0-35 are the main storage and hotbar; armour and the off-hand sit
-     * above them. That split has held across every release this matrix builds, which is why the
-     * check is a number rather than {@code Inventory.EQUIPMENT_SLOT_MAPPING} — that constant only
-     * exists from 1.21.8, and {@code common/} compiles back to 1.14.4.
-     */
-    private static final int MAIN_INVENTORY_SLOTS = 36;
 
     /** The slots {@link #wornSlotFor} considers "worn". Every one exists back to 1.14.4. */
     private static final EquipmentSlot[] WEARABLE = {

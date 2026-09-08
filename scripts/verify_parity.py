@@ -95,7 +95,9 @@ def main():
         c2 = call(s, "container")
         trade_ok = ("Merchant" in c2.get("handler", "")) or len(c2.get("trades", [])) > 0
         print(f"[parity] after interact: handler={c2.get('handler')} trades={len(c2.get('trades', []))}")
-        call(s, "closeScreen")
+        closed = call(s, "closeScreen")
+        # `closed` is read back from the client rather than hardcoded, so it is worth asserting.
+        assert closed["closed"], f"the trade screen would not close: {closed}"
     else:
         print("[parity] no trader found (summon may have failed)")
 

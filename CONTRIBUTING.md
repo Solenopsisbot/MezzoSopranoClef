@@ -70,6 +70,13 @@ python3 scripts/check_accessors.py 1.16.5                    # @Accessor types v
 Look the signature up rather than recalling it — the same method changes shape several times across
 the matrix, and a wrong guess costs a boot to discover.
 
+The same applies to what a field *means*, which no compiler will check for you. The one that has
+already cost us a bug: **`Slot.index` is the slot's position in the menu, not its index in the
+container.** `AbstractContainerMenu.addSlot` assigns it, which is why it is the number the click
+packet carries — but it means an `InventoryMenu` slot holding hotbar item 0 has `index == 36`.
+Comparing it against inventory indices silently drops the whole hotbar. Use `getContainerSlot()`
+(1.17.1+) if you genuinely need the container index, and prefer not needing it.
+
 ### Layering
 
 Four layers, sharing as much as honestly possible:

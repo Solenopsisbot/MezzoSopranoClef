@@ -399,8 +399,13 @@ class ClefClient:
         return self.call("combat.status")
 
     def equip(self, item: str) -> Dict[str, Any]:
-        """Wear or hold an item. Already in its equipment slot is a no-op (``changed: False``) —
-        re-equipping worn armour does not take it off."""
+        """Wear an item. Already in its equipment slot is a no-op (``changed: False``) —
+        re-equipping worn armour does not take it off.
+
+        ``changed`` is read back from the equipment slot rather than assumed from the click, so
+        it is ``False`` both when the item was already worn (``worn: True``) and when the
+        shift-click could not equip it at all — a sword, or a full armour slot (``worn: False``,
+        with ``detail`` saying which). ``moved`` reports whether the stack went anywhere."""
         return self.call("equip", item=item)
 
     def screenshot(self, timeout: float = 60.0, **opts: Any) -> bytes:

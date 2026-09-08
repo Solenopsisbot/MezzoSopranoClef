@@ -55,13 +55,14 @@ A tour of the parts that aren't obvious from the schema:
 | Know if the block was placed | `place {x,y,z,item?}` verifies the world changed instead of assuming the click worked |
 | Fight something | `entities {kinds:["zombie"]}` carries health, hostility, held item, per-tick motion and whether it's looking at you; `entityHurt` names the attacker |
 | Actually hit it | `shootAt {entityId, shots}` and `meleeWhile {entityId, maxMs}` — the loop runs on the bot, not over the socket; `combat.stop` takes the body back |
-| Put armour on | `equip {item}` — already worn is `{changed:false}`, not an undress |
+| Put armour on | `equip {item}` — already worn is `{changed:false}`, not an undress; `changed` is read back from the equipment slot, so a shift-click that couldn't equip says so instead of claiming success |
+| Get rid of a screen | `closeScreen` names what was open and reports whether it *stayed* closed — `{closed:false, stillOpen:"death"}` beats a hardcoded success |
 | See the layout | `screenshot {mode:"topdown", radius:64}` for an orthographic map (east-right, north-up) |
 | Label a screenshot | `screenshot {annotate:true}` also returns the camera and each visible entity's screen-space box |
 | Save round-trips | `batch {commands:[{cmd,args}...]}` runs them in order and returns every result |
 | Read the sky honestly | screenshots use the real biome/time-of-day tint on 1.14.4–1.21.8; **on 1.21.11 and 26.2 the sky is a fixed daylight blue** — see below |
 | Read Baritone's own output | `baritone {command}` returns the lines it printed, and `baritone.log` streams them — otherwise they go to a chat HUD a headless bot doesn't have |
-| Know which screen you're on | `status.screen` is a stable name (`title`, `death`, `container`, …), not the obfuscated class; the raw one is in `screenClass` |
+| Know which screen you're on | `status.screen` is a stable name (`title`, `death`, `pause`, `container`, …), not the obfuscated class; the raw one is in `screenClass` |
 
 Event delivery is opt-in per connection (`subscribe`), and every non-trivial producer checks whether
 anyone is listening before doing the work — an unsubscribed bot pays close to nothing for the
@@ -118,6 +119,26 @@ Navigation reports completion exactly once. `nav.done` and `nav.failed` are **te
 `nav.done` can follow a `nav.failed` for the same goal. Baritone's non-terminal path events
 (a mid-route recalculation, a spliced segment) arrive as `nav.progress` instead, because reporting
 them as failures made callers abandon goals the bot went on to reach.
+
+### The pause screen a headless client can never dismiss
+
+Vanilla pauses the game when the window loses focus. A bot has no window to focus — under
+`noWindow` there is not even a display server — so that check can only ever answer "unfocused",
+and it re-runs every frame: the pause screen comes back faster than any `closeScreen` can clear
+it, and Minecraft skips the whole input path while a screen is up, so movement, mining and the
+bow all stop at once. The client now pins `pauseOnLostFocus` off whenever it is headless
+(`InputController`), which is cheap and removes the failure mode outright.
+
+Today it is latent rather than live, and the reason is worth writing down because it is one line
+away from changing. On **26.2** the check runs in `Minecraft.pauseIfInactive()`, called from
+`renderFrame` — which headless still executes — and is held off only by `Window.focused` being
+initialised `true` and never receiving a GLFW focus callback a hidden window doesn't get. On
+**1.14.4 – 1.21.11** it lives in `GameRenderer.render`, which the headless mixin skips outright.
+
+Relatedly, `closeScreen` no longer reports `{closed:true}` and hopes. It reads the screen back
+after the attempt, so a screen that refuses to go — the death screen while the player is dying,
+the title screen with no level, anything that re-opens itself — comes back as
+`{closed:false, stillOpen:"death"}` instead of a success the caller can't check.
 
 ## Authentication
 

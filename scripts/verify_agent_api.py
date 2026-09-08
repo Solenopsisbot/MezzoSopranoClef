@@ -311,6 +311,8 @@ def main():
 
     print("\n[verify] equipment")
     check("equipping worn armour a second time does not undress", lambda: equip_idempotent(s))
+    check("equip reports changed:false when it cannot equip", lambda: equip_unequippable(s))
+    check("closeScreen reports what it closed, and whether it stayed closed", lambda: close_screen_reads_back(s))
 
     print("\n[verify] screenshots")
     check("perspective capture returns a PNG", lambda: shot_normal(s))
@@ -904,7 +906,56 @@ def equip_idempotent(s):
     time.sleep(0.5)
     still = call(s, "status")["player"]["armor"]
     assert still[1] == "minecraft:iron_chestplate", f"re-equipping undressed the bot: {still}"
+    assert second.get("worn") is True and second.get("moved") is False, second
     return "worn once, no-op the second time, still worn"
+
+
+def equip_unequippable(s):
+    """`equip` used to answer `changed:true` for the click, not for the outcome.
+
+    A stone block has no equipment slot, so the shift-click can only shuffle it between the
+    hotbar and the main inventory — it is never worn. The old code reported that as a successful
+    equip, which is a lie a caller has no way to catch: `status` shows bare armour slots and the
+    command said it worked. The answer now comes from reading the equipment slot back."""
+    if not give(s, "minecraft:stone"):
+        raise Skip("/give was denied (needs op)")
+    result = call(s, "equip", item="minecraft:stone")
+    assert result["changed"] is False, f"claimed to have equipped a stone block: {result}"
+    assert result["worn"] is False, result
+    assert result.get("detail"), "no detail explaining why nothing was equipped"
+    return f"changed=False, moved={result['moved']}, detail={result['detail']!r}"
+
+
+def close_screen_reads_back(s):
+    """`closed` has to be a measurement, not a constant.
+
+    With no screen open there is nothing to close, and the honest answer is `wasOpen:false`,
+    `closed:true`. Then open a real trade screen and check the command names the screen it
+    closed and confirms it actually went."""
+    idle = call(s, "closeScreen")
+    assert idle["wasOpen"] is False, f"claimed something was open on an empty screen: {idle}"
+    assert idle["closed"] is True and idle["screen"] == "none", idle
+
+    call(s, "chat", message="/summon minecraft:wandering_trader ~ ~ ~2")
+    time.sleep(1.5)
+    ents = call(s, "entities", radius=12)
+    trader = next((e for e in ents if "trader" in e["type"] or "villager" in e["type"]), None)
+    if trader is None:
+        raise Skip("/summon was denied (needs op)")
+    call(s, "look", yaw=0, pitch=0)
+    call(s, "interactEntity", entityId=trader["id"])
+    time.sleep(1.5)
+    opened = call(s, "status")["screen"]
+    if opened == "none":
+        raise Skip("the trade screen never opened")
+
+    closed = call(s, "closeScreen")
+    assert closed["wasOpen"] is True, closed
+    assert closed["screen"] == opened, f"named the wrong screen: {closed} vs status {opened}"
+    assert closed["closed"] is True, f"did not close, still on {closed.get('stillOpen')}: {closed}"
+    time.sleep(0.3)
+    assert call(s, "status")["screen"] == "none", "the screen came back"
+    return f"idle -> wasOpen=False; {opened} -> closed=True"
 
 
 def shot(s, **kw):

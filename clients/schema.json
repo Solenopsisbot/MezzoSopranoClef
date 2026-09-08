@@ -1024,9 +1024,9 @@
     },
     {
       "name": "closeScreen",
-      "summary": "close the open container/screen",
+      "summary": "close whatever screen is open — container, pause, death, modded — and report whether it actually closed",
       "args": [],
-      "result": "{closed}"
+      "result": "{closed,wasOpen,screen,stillOpen?} — closed is read back after the attempt, not assumed; stillOpen names what refused to go"
     },
     {
       "name": "selectTrade",
@@ -1096,7 +1096,7 @@
     },
     {
       "name": "equip",
-      "summary": "wear or hold an item from the inventory — already in its equipment slot is a no-op ({changed:false}), not an undress {item}",
+      "summary": "wear an item from the inventory — idempotent (already worn is {changed:false}, not an undress) and confirmed by reading the slot back {item}",
       "args": [
         {
           "name": "item",
@@ -1104,7 +1104,7 @@
           "required": true
         }
       ],
-      "result": "{equipped,changed,slot?,fromSlot?} — changed:false means it was already worn and nothing was clicked"
+      "result": "{equipped,changed,worn,moved,slot?,fromSlot?,detail?} — changed is read back from the equipment slot, never assumed from the click: already worn is {changed:false,worn:true}, and a shift-click with nowhere to go is {changed:false,moved:false,detail}"
     },
     {
       "name": "moveToHotbar",

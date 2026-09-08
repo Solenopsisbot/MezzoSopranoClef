@@ -377,12 +377,19 @@ export class ClefClient {
   combatStatus() { return this.call<{ busy: boolean; kind?: string }>("combat.status"); }
 
   /**
-   * Wear or hold an item. Already in its equipment slot is a no-op (`changed: false`) —
-   * re-equipping worn armour does not take it off.
+   * Wear an item. Already in its equipment slot is a no-op (`changed: false`) — re-equipping
+   * worn armour does not take it off.
+   *
+   * `changed` is read back from the equipment slot rather than assumed from the click, so it is
+   * `false` both when the item was already worn (`worn: true`) and when the shift-click could
+   * not equip it at all — a sword, or a full armour slot (`worn: false`, with `detail` saying
+   * which). `moved` reports whether the stack went anywhere.
    */
   equip(item: string) {
-    return this.call<{ equipped: string; changed: boolean; slot?: string; fromSlot?: number }>(
-      "equip", { item });
+    return this.call<{
+      equipped: string; changed: boolean; worn: boolean; moved: boolean;
+      slot?: string; fromSlot?: number; detail?: string;
+    }>("equip", { item });
   }
   inventory() { return this.call("inventory"); }
   /** Nearby entities with health, hostility, held item and trade data. `kinds` filters by type id. */

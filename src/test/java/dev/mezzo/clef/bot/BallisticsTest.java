@@ -82,6 +82,56 @@ class BallisticsTest {
     }
 
     @Test
+    void dropCompensationIsPinnedToTheNumbersLiveFireMeasured() {
+        // Where "shootAt under-compensates the drop by about 2x" comes from, and why it is a
+        // statement about the rule of thumb rather than about this solver.
+        //
+        // Aiming a bow by hand means computing the flight time as `range / 60 blocks-per-second`
+        // and dropping `10*t²` for it. Both halves of that are the drag-free answer, and drag
+        // pushes both the same way: the arrow is slower than 60 b/s almost immediately, so it
+        // hangs in the air longer than the estimate AND falls for longer than the estimate says.
+        // The error is one-sided and compounds with range — every shot lands low, and the further
+        // out it is the lower it lands. That is the shape the field reports describe.
+        //
+        // What this solver does instead is fly the arrow. The correction it applies is level with
+        // the naive rule out to ~30 blocks and about 1.5x it at 100, which is the "roughly double"
+        // a long shot needs. Pinned to exact values so the next report of arrows landing low can
+        // be answered with a number rather than an argument, and so a well-meaning switch back to
+        // a closed form fails here instead of in front of a creeper.
+        double[][] pinned = {          // range, drop the solver compensates, ratio to `10*t²`
+                {30, 2.44, 0.98},
+                {50, 7.56, 1.09},
+                {80, 22.95, 1.29},
+                {100, 42.72, 1.54},
+        };
+        for (double[] row : pinned) {
+            double range = row[0];
+            Ballistics.Aim aim = Ballistics.solve(range, 0, FULL_DRAW);
+            assertNotNull(aim, "no solution at " + range + " blocks");
+            // The arrow leaves along the elevation line and arrives level with where it started,
+            // so it has fallen exactly this far below the line it was fired along.
+            double drop = Math.tan(Math.toRadians(aim.elevationDegrees())) * range;
+            assertEquals(row[1], drop, 0.01, "drop compensated at " + range + " blocks");
+
+            double dragFreeSeconds = range / (Ballistics.BOW_MAX_SPEED * 20.0);
+            double naive = 10 * dragFreeSeconds * dragFreeSeconds;
+            assertEquals(row[2], drop / naive, 0.01,
+                    "ratio to the drag-free rule at " + range + " blocks");
+        }
+    }
+
+    @Test
+    void aChargeAboveFullDrawStillLoosesAtFullSpeed() {
+        // shootAt defaults to charging 25 ticks rather than the 20 a full draw needs, so the
+        // server's own counter can lag the client's by a few ticks without the arrow leaving slow.
+        // An arrow launched below 3 b/t against a solution computed for 3 b/t lands low, which is
+        // the other way this command could have earned an "under-compensates the drop" report.
+        assertEquals(3.0, Ballistics.bowSpeed(25), 1e-9);
+        assertEquals(3.0, Ballistics.bowSpeed(20), 1e-9);
+        assertTrue(Ballistics.bowSpeed(17) < 3.0, "17 ticks is not a full draw");
+    }
+
+    @Test
     void refusesShotsItCannotMake() {
         assertNull(Ballistics.solve(500, 0, FULL_DRAW), "far beyond a bow's reach");
         assertNull(Ballistics.solve(40, 200, FULL_DRAW), "straight up a cliff face");
