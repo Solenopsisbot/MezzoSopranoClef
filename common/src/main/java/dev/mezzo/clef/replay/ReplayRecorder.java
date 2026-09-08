@@ -241,7 +241,9 @@ public final class ReplayRecorder implements ReplayTap.Sink {
             return true;
         } catch (IOException e) {
             MezzoClef.LOG.error("Replay self-tracking write failed", e);
-            endSession("error");
+            // Tokened: `s` is the recording that failed. If a newer connection superseded it
+            // between the read above and here, the untokened form would end the wrong one.
+            endSession(s.id, "error");
             return false;
         }
     }
@@ -427,8 +429,10 @@ public final class ReplayRecorder implements ReplayTap.Sink {
 
     /** The slow half of ending a recording: emit, seal, close, delete. Worker thread only. */
     private void finish(Session s, String name, ReplaySessionInfo meta, JsonObject stopped) {
-        Events.emit("replay.stopped", stopped);
+        // Inside the try: the finally below is what closes and deletes the scratch file, and that
+        // must hold even if a subscriber write throws something emitEvent does not catch.
         try {
+            Events.emit("replay.stopped", stopped);
             if (name != null) {
                 SaveResult saved = seal(s, name, meta);
                 Events.emit("replay.saved", saved.toJson());
