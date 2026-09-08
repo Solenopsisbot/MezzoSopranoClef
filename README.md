@@ -14,6 +14,8 @@ Headless Minecraft client for automation. It runs the real Fabric client, keeps 
   for a dense cuboid, `target` for what's under the crosshair — instead of one block per round-trip.
 - Streams chat, health, death, entity, block-update, pickup, weather, time, sleep and navigation events.
 - Runs Baritone pathing when its compatible jar is bundled, and reports arrival or failure as an event.
+- Records what a client saw as a **ReplayMod `.mcpr`**, bot's own body included — armed per
+  connection, sealed into a finished, openable replay at any moment, including mid-run.
 - Boots without a display or OpenGL context (`noGl`) and captures PNG screenshots on demand, including
   an orthographic top-down map and annotated captures with on-screen entity boxes.
 - Includes a browser dashboard plus Python and TypeScript clients.
@@ -62,6 +64,7 @@ A tour of the parts that aren't obvious from the schema:
 | Save round-trips | `batch {commands:[{cmd,args}...]}` runs them in order and returns every result |
 | Read the sky honestly | screenshots use the real biome/time-of-day tint on 1.14.4–1.21.8; **on 1.21.11 and 26.2 the sky is a fixed daylight blue** — see below |
 | Read Baritone's own output | `baritone {command}` returns the lines it printed, and `baritone.log` streams them — otherwise they go to a chat HUD a headless bot doesn't have |
+| Record what the bot saw | `replay.record {enabled:true}`, then connect — `replay.save` seals a ReplayMod-openable `.mcpr` of everything so far, mid-run and repeatedly |
 | Know which screen you're on | `status.screen` is a stable name (`title`, `death`, `pause`, `container`, …), not the obfuscated class; the raw one is in `screenClass` |
 
 Event delivery is opt-in per connection (`subscribe`), and every non-trivial producer checks whether
@@ -105,6 +108,82 @@ the part to hit is still resolved internally); and the pre-1.20 modules carry no
 the bow must already be on the hotbar rather than being swapped in from the bag. `combatDone` needs
 the shared `EventEmitter`, which those modules also predate, so there the command result is the
 only report — it is complete either way.
+
+### Replays: the bot records, a real client watches
+
+`replay` produces ReplayMod's own `.mcpr` files. It does not play them back — a headless client has
+no renderer worth the name and nobody looking at it — so the split is: the bot writes the file, and
+a normal Minecraft client with ReplayMod installed (or ReplayStudio, or anything else that reads the
+format) opens it. Sealed replays land in `replay_recordings/` under the run directory, which is
+ReplayMod's own folder name, so copying one into a real install makes it show up in the replay list.
+
+Recording is a **connection**, not a command. A replay is played back by feeding its packets into a
+client that starts in the login state, so the file has to begin at login success — everything a
+viewer needs about the world (registries, chunks, entities, the tab list) arrives once, right after
+that, and is never sent again. So `replay.record {enabled:true}` *arms* capture and the next
+connection is recorded whole; it cannot retrofit a recording onto a session already in progress, and
+it says so rather than writing a file that will not open. ReplayMod lives under the same constraint.
+
+**`replay.save` is the one that works at any moment.** It seals everything captured so far into a
+complete, openable replay while the bot plays on, as many times as you ask — the recording is a
+growing packet log and a snapshot is just a prefix of it. That is the honest version of "watch it
+while it happens": you get a finished file of the run up to the instant you asked, not a live
+stream. `replay.marker` drops a named pip on the timeline so you can find the interesting bit.
+
+What lands on disk is the raw clientbound packet stream, copied out of the netty pipeline
+immediately before Minecraft's own `decoder` — after decryption, decompression and, crucially,
+**after ViaFabricPlus's translation**. Record a 1.12.2 server and you get a replay in *this
+client's* protocol, which is the one your ReplayMod understands — verified, not assumed:
+`MC_VERSION=1.12.2 scripts/e2e.sh` joins a real 1.12.2 server and the sealed file comes back
+`mcversion 26.2, protocol 776`. `replay.status` prints the live inbound handler order
+(`splitter → via-decoder → via-flow-control → clef-replay-tap → decoder`) and every e2e run asserts
+it: the tap must be the handler immediately before `decoder`, with every inbound Via handler
+upstream of it. Nothing in the recorder deserializes a packet, which is why the whole thing is
+version-neutral code in `common/` plus one mixin.
+
+#### The bot's own body
+
+A capture of the wire has a hole in it exactly where the recorder was standing. A server never
+sends you your own spawn packet and never sends you your own movement — your client already knows
+where it put you, and the only thing that travels is your *outbound* position report. So the bot's
+body has to be **synthesized**, which `SelfTrack` does from the client tick: an add-entity, its
+metadata and its equipment on entering a world, then a position sync whenever it actually moved, a
+head rotation when the head turned past what the wire can even represent, equipment on change, and
+a swing packet per swing. Re-announced on respawn and on dimension change, because those make the
+viewer drop every entity it knows about.
+
+Those packets are encoded with **the connection's own codec** — borrowed from the `decoder` handler
+sitting immediately after the tap — rather than a second implementation that could drift from it by
+a byte. And the first one of each recording is decoded straight back and checked before anything is
+written, because bytes that fail to encode loudly are the easy case; bytes that encode wrong are the
+one that corrupts a file. `replay.status` reports the result as `selfTrack: verified` with a
+`selfPackets` count, and the e2e turns the bot's head and asserts that count grows, so "the body is
+in there" is a checkable claim rather than a hopeful one. If encoding ever does fail, self-tracking
+stops for that recording and says so — the captured stream is untouched and the replay still opens,
+just without a body in it.
+
+Two limits worth knowing before you rely on it:
+
+- **Singleplayer is not recorded.** An integrated server's pipeline moves packet objects, never
+  bytes, so there is nothing to copy. Connections to real servers are the whole use case.
+- **26.2 only, so far.** The recorder is version-neutral but the mixin that installs it is not
+  ported yet, so on every other target `replay.status` answers `{supported:false}` and the commands
+  explain themselves instead of vanishing from `help`.
+
+Off by default (`replay.enabled`), because a recording is the entire inbound packet stream: cheap in
+CPU, not cheap in disk. `replay.maxSizeMb` stops a forgotten bot filling a volume, `replay.autoSave`
+seals automatically when the connection ends — including on the SIGTERM every script here stops the
+bot with — and `replay.list` says what is already there.
+
+Sealed replays are written `0600`. A replay is a complete record of everything the bot saw, chat
+included, and these run on shared hosts.
+
+Automatic seals run on a `clef-replay` worker rather than wherever the recording happened to stop.
+Deflating half a gigabyte takes ten to twenty seconds, and the two threads that can trip the size
+cap are the netty IO thread (which is upstream of the decoder, so blocking it stops keep-alives and
+the server kicks the bot for timing out) and the client tick (which would visibly freeze the game).
+`replay.save` still seals on the calling thread: the control plane asked for a file and is waiting
+for its path.
 
 ### Two things worth knowing about Baritone
 

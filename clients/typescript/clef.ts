@@ -396,6 +396,37 @@ export class ClefClient {
   entities(radius?: number, kinds?: string[]) { return this.call<any[]>("entities", prune({ radius, kinds })); }
   blockAt(x: number, y: number, z: number) { return this.call("blockAt", { x, y, z }); }
 
+  // ---- replay recording (ReplayMod .mcpr) -------------------------------------------
+
+  /**
+   * Arm or disarm packet capture. Takes effect on the **next** connection, not this one: a replay
+   * has to begin at a connection's login or it cannot be played back at all.
+   */
+  replayRecord(enabled = true) {
+    return this.call<{ supported: boolean; armed: boolean; recording: boolean; ended: boolean;
+                       note?: string }>("replay.record", { enabled });
+  }
+  /**
+   * Seal everything recorded so far into a finished `.mcpr`, and keep recording. Safe to call
+   * repeatedly mid-run — each call is a complete replay ending at that moment, which is how you
+   * watch a bot that has not stopped playing.
+   */
+  replaySave(name?: string) {
+    return this.call<{ saved: boolean; name: string; path: string; durationMs: number;
+                       packets: number; bytes: number }>("replay.save", prune({ name }));
+  }
+  /** Drop a named pip on the replay timeline at the bot's current position. */
+  replayMarker(name?: string) { return this.call("replay.marker", prune({ name })); }
+  replayStatus() {
+    return this.call<{ supported: boolean; armed: boolean; recording: boolean; dir: string;
+                       durationMs?: number; packets?: number; bytes?: number;
+                       pipeline: string[] }>("replay.status");
+  }
+  replayList() {
+    return this.call<{ dir: string; replays: Array<{ name: string; path: string; bytes: number;
+                       modified: number }> }>("replay.list");
+  }
+
   // ---- bulk world queries ----------------------------------------------------------
 
   /** Nearest matching blocks in the loaded chunks. `ids` accepts block ids and `#tag` names. */

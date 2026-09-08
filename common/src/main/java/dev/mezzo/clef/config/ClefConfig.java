@@ -25,6 +25,7 @@ public final class ClefConfig {
     public Control control = new Control();
     public Screenshot screenshot = new Screenshot();
     public EventStream events = new EventStream();
+    public Replay replay = new Replay();
     public Queries queries = new Queries();
     public boolean headless = true;
     /** Per-loop sleep (ms) while in-world rendering is skipped — keeps idle CPU low. Higher =
@@ -119,6 +120,34 @@ public final class ClefConfig {
         public double packetRadius = 32.0;
         /** How many chat lines {@code chatHistory} keeps. */
         public int chatHistory = 200;
+    }
+
+    /**
+     * ReplayMod-format recording. Off by default: a recording is the whole inbound packet stream,
+     * which is cheap in CPU and not cheap in disk.
+     *
+     * <p>Capture is armed per <i>connection</i>, not per command — a replay has to begin at login
+     * or it cannot be played back at all — so turning this on takes effect from the next connect.
+     */
+    public static final class Replay {
+        /** Record every connection's inbound packets, from login success onwards. */
+        public boolean enabled = false;
+        /**
+         * Where sealed {@code .mcpr} files go, relative to the game directory. The default is
+         * ReplayMod's own folder name, so a normal client pointed at this directory lists them.
+         */
+        public String dir = "replay_recordings";
+        /**
+         * Seal a replay automatically when the connection ends. On by default, because the
+         * alternative is arming a recording and then losing it to a disconnect nobody was awake for;
+         * {@code replay.save} can still take snapshots along the way.
+         */
+        public boolean autoSave = true;
+        /**
+         * Stop recording once the file passes this many MiB (0 = no limit). A busy client writes a
+         * few MiB a minute, and two dozen of them share one disk.
+         */
+        public int maxSizeMb = 512;
     }
 
     /** Limits on the bulk world-query commands, which read the chunk cache on the client thread. */
@@ -247,6 +276,15 @@ public final class ClefConfig {
         if (bur != null) try { events.blockUpdateRadius = Integer.parseInt(bur); } catch (NumberFormatException ignored) {}
         String chl = System.getProperty("mezzoclef.events.chatHistory");
         if (chl != null) try { events.chatHistory = Integer.parseInt(chl); } catch (NumberFormatException ignored) {}
+
+        String rec = System.getProperty("mezzoclef.replay.enabled");
+        if (rec != null) replay.enabled = Boolean.parseBoolean(rec);
+        String recDir = System.getProperty("mezzoclef.replay.dir");
+        if (recDir != null) replay.dir = recDir;
+        String recSave = System.getProperty("mezzoclef.replay.autoSave");
+        if (recSave != null) replay.autoSave = Boolean.parseBoolean(recSave);
+        String recMax = System.getProperty("mezzoclef.replay.maxSizeMb");
+        if (recMax != null) try { replay.maxSizeMb = Integer.parseInt(recMax); } catch (NumberFormatException ignored) {}
     }
 
     public static String generateAuthToken() {
