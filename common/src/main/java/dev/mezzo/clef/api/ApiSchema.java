@@ -336,13 +336,16 @@ public final class ApiSchema {
                     .f("text", Type.STRING),
             e("replay.started", "packet capture began — a server connection reached login success")
                     .f("serverName", Type.STRING).f("scratch", Type.STRING),
-            e("replay.saved", "a .mcpr was sealed (by replay.save, or automatically at disconnect)")
+            e("replay.saved", "a .mcpr was sealed — by replay.save, or automatically once the "
+                    + "worker finished the seal announced by replay.stopped")
                     .f("name", Type.STRING).f("path", Type.STRING).f("durationMs", Type.INT)
                     .f("packets", Type.LONG).f("bytes", Type.LONG),
             e("replay.stopped", "packet capture ended. reason is disconnected | disarmed | "
-                    + "superseded | size_limit | shutdown | error")
+                    + "superseded | size_limit | shutdown | error. autoSaving says whether a "
+                    + "replay.saved will follow — the seal runs on a worker, not on the thread "
+                    + "that stopped the recording, so the file is not ready yet when this arrives")
                     .f("reason", Type.STRING).f("durationMs", Type.INT).f("packets", Type.LONG)
-                    .f("bytes", Type.LONG).opt("saved", Type.STRING).opt("error", Type.STRING),
+                    .f("bytes", Type.LONG).f("autoSaving", Type.BOOL),
             e("auth.prompt", "device-code login: show this to the user (always delivered)")
                     .f("verificationUri", Type.STRING).f("userCode", Type.STRING),
             e("auth.ok", "login succeeded (always delivered)"),

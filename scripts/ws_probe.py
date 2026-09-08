@@ -14,6 +14,7 @@ Env:
   CLEF_OUT (default .)              - where to save the screenshot
   CLEF_CONNECT_TIMEOUT (default 90) - seconds to wait for the control plane to come up
   CLEF_WORLD_TIMEOUT (default 120)  - seconds to wait for the bot to enter a world
+  CLEF_EXPECT_REPLAY (unset)        - require replay capture to be armed rather than skipping it
 
 Exit code 0 = all assertions passed.
 """
@@ -194,7 +195,15 @@ def check_replay(s, native):
     if not st.get("supported"):
         print(f"[probe] replay check skipped: no replay tap on {native}")
         return
-    assert st.get("armed"), f"replay capture was armed in the config but reports {st}"
+    # Recording is off in the default config, and the README documents running this probe against a
+    # plain `./gradlew :runClient`. Skip there; require it where the harness armed it (e2e.sh), so
+    # a regression that quietly stops arming still fails the build rather than being skipped.
+    if not st.get("armed"):
+        if not os.environ.get("CLEF_EXPECT_REPLAY"):
+            print("[probe] replay checks skipped: capture is not armed "
+                  "(set replay.enabled, or CLEF_EXPECT_REPLAY=1 to require it)")
+            return
+        raise AssertionError(f"CLEF_EXPECT_REPLAY is set but capture is not armed: {st}")
     assert st.get("recording"), (
         "no recording in progress — the tap never saw a login success, which means either the "
         f"Connection mixin did not apply or it was inserted too late. status={st}")
@@ -257,6 +266,19 @@ def check_replay(s, native):
         f"replay.save reported {saved['packets']} packets but the file holds {len(packets)}")
     print(f"[probe] replay OK: {len(packets)} framed packets, mcversion={meta['mcversion']}, "
           f"protocol={meta['protocol']}")
+
+    # Ending a recording hands the seal AND its events to the clef-replay worker, because the
+    # threads that can end one (netty IO, the client tick) must not wait on a deflate. Disarm and
+    # require both events plus the file, so that hand-off is exercised rather than assumed.
+    call(s, "subscribe", events=["replay.stopped", "replay.saved"])
+    call(s, "replay.record", enabled=False)
+    stopped = wait_for_event(s, "replay.stopped", lambda d: d.get("reason") == "disarmed", timeout=30)
+    assert stopped.get("autoSaving") is True, f"autoSave was on but the stop says {stopped}"
+    auto = wait_for_event(s, "replay.saved", lambda d: d.get("name") != saved["name"], timeout=60)
+    listed = {r["name"] for r in call(s, "replay.list")["replays"]}
+    assert auto["name"] in listed, f"auto-saved {auto['name']} missing from {sorted(listed)}"
+    assert call(s, "replay.status").get("recording") is False
+    print(f"[probe] async auto-save OK: {auto['name']} ({auto['packets']} packets) sealed off-thread")
 
 
 def read_mcpr(path):

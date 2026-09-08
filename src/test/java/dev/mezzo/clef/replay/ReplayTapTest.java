@@ -21,6 +21,9 @@ class ReplayTapTest {
 
     /** Records what the tap handed over, and lets a test make the recorder misbehave. */
     private static class FakeSink implements ReplayTap.Sink {
+        long nextSession = 1;
+        final List<Long> recordedFor = new ArrayList<>();
+        final List<Long> endedFor = new ArrayList<>();
         final List<byte[]> packets = new ArrayList<>();
         final List<String> endings = new ArrayList<>();
         Throwable aborted;
@@ -28,21 +31,23 @@ class ReplayTapTest {
         boolean acceptSession = true;
         int stopAfter = Integer.MAX_VALUE;
 
-        @Override public boolean beginSession(io.netty.channel.ChannelPipeline pipeline) {
+        @Override public long beginSession(io.netty.channel.ChannelPipeline pipeline) {
             this.pipeline = pipeline;
-            return acceptSession;
+            return acceptSession ? nextSession++ : 0L;
         }
 
-        @Override public boolean record(byte[] packet) {
+        @Override public boolean record(long session, byte[] packet) {
             packets.add(packet);
+            recordedFor.add(session);
             return packets.size() < stopAfter;
         }
 
-        @Override public void endSession(String reason) {
+        @Override public void endSession(long session, String reason) {
             endings.add(reason);
+            endedFor.add(session);
         }
 
-        @Override public void abort(Throwable cause) {
+        @Override public void abort(long session, Throwable cause) {
             aborted = cause;
         }
     }
@@ -156,7 +161,7 @@ class ReplayTapTest {
     @Test
     void survivesARecorderThatThrows() {
         FakeSink sink = new FakeSink() {
-            @Override public boolean beginSession(io.netty.channel.ChannelPipeline pipeline) {
+            @Override public long beginSession(io.netty.channel.ChannelPipeline pipeline) {
                 throw new IllegalStateException("disk on fire");
             }
         };
@@ -176,6 +181,50 @@ class ReplayTapTest {
         EmbeddedChannel channel = new EmbeddedChannel(new ReplayTap(sink));
         channel.writeInbound(Unpooled.EMPTY_BUFFER);
         assertTrue(sink.packets.isEmpty());
+        channel.finishAndReleaseAll();
+    }
+
+    /**
+     * The regression that matters most here. In the PLAY protocol clientbound 0x02 is
+     * ClientboundAnimatePacket — any nearby entity swinging an arm — so a login gate that re-arms
+     * after the recording stops opens a second "recording" that begins with an animate instead of a
+     * login success: an .mcpr that opens and cannot play. With autoSave on and a size cap set it
+     * would do that on a loop.
+     */
+    @Test
+    void neverReopensAfterTheRecordingHasStopped() {
+        FakeSink sink = new FakeSink();
+        sink.stopAfter = 1;                       // e.g. the size cap trips on the first packet
+        EmbeddedChannel channel = new EmbeddedChannel(new ReplayTap(sink));
+        channel.writeInbound(packet(0x02));       // login success: opens session 1, then stops
+        assertEquals(1, sink.packets.size());
+
+        channel.writeInbound(packet(0x02, 0x07, 0x00));   // an animate, in the play phase
+        channel.writeInbound(packet(0x02, 0x08, 0x00));
+        assertEquals(1, sink.packets.size(), "the login gate must not re-arm");
+        assertEquals(1, sink.nextSession - 1, "no second session may be opened");
+
+        channel.close();
+        assertTrue(sink.endings.isEmpty(), "a stopped recording must not be ended twice");
+        channel.finishAndReleaseAll();
+    }
+
+    /**
+     * The bot's reconnect path leaves both sockets open until the server drops the first, so the
+     * losing tap keeps delivering packets after a newer connection has opened its own recording.
+     * Every call carries the session it belongs to precisely so the recorder can tell them apart.
+     */
+    @Test
+    void tagsEveryCallWithTheSessionItOpened() {
+        FakeSink sink = new FakeSink();
+        sink.nextSession = 7;
+        EmbeddedChannel channel = new EmbeddedChannel(new ReplayTap(sink));
+        channel.writeInbound(packet(0x02));
+        channel.writeInbound(packet(0x27));
+        channel.close();
+
+        assertEquals(List.of(7L, 7L), sink.recordedFor);
+        assertEquals(List.of(7L), sink.endedFor);
         channel.finishAndReleaseAll();
     }
 

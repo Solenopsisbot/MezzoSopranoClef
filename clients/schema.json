@@ -1884,7 +1884,7 @@
     },
     {
       "name": "replay.saved",
-      "description": "a .mcpr was sealed (by replay.save, or automatically at disconnect)",
+      "description": "a .mcpr was sealed — by replay.save, or automatically once the worker finished the seal announced by replay.stopped",
       "fields": [
         {
           "name": "name",
@@ -1915,7 +1915,7 @@
     },
     {
       "name": "replay.stopped",
-      "description": "packet capture ended. reason is disconnected | disarmed | superseded | size_limit | shutdown | error",
+      "description": "packet capture ended. reason is disconnected | disarmed | superseded | size_limit | shutdown | error. autoSaving says whether a replay.saved will follow — the seal runs on a worker, not on the thread that stopped the recording, so the file is not ready yet when this arrives",
       "fields": [
         {
           "name": "reason",
@@ -1938,14 +1938,9 @@
           "required": true
         },
         {
-          "name": "saved",
-          "type": "string",
-          "required": false
-        },
-        {
-          "name": "error",
-          "type": "string",
-          "required": false
+          "name": "autoSaving",
+          "type": "bool",
+          "required": true
         }
       ]
     },

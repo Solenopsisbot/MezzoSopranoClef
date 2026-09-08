@@ -50,6 +50,12 @@ public final class McprWriter implements Closeable {
 
     private final Path scratch;
     private final OutputStream out;
+    /**
+     * Held for the duration of a seal, and deliberately not the same monitor as {@link #write}: two
+     * seals of one recording must not interleave (an auto-save racing a {@code replay.save}, or two
+     * saves with the same name), but recording has to carry on through both.
+     */
+    private final Object sealLock = new Object();
 
     private long bytes;
     private long packets;
@@ -134,9 +140,25 @@ public final class McprWriter implements Closeable {
      *         the time this returns
      */
     public Extent seal(Path target, ReplayMetadata meta, List<ReplayMarker> markers) throws IOException {
+        synchronized (sealLock) {
+            return sealLocked(target, meta, markers);
+        }
+    }
+
+    private Extent sealLocked(Path target, ReplayMetadata meta, List<ReplayMarker> markers)
+            throws IOException {
         Extent extent = flushToDisk();
-        Files.createDirectories(target.toAbsolutePath().getParent());
-        Path tmp = target.resolveSibling(target.getFileName() + ".part");
+        Path dir = target.toAbsolutePath().getParent();
+        Files.createDirectories(dir);
+        // A unique temp rather than "<target>.part": two seals racing on a shared deterministic
+        // name would open the same file and interleave two zip streams into it, and the loser's
+        // move would then either fail or clobber a result somebody was already told about.
+        //
+        // Side effect worth keeping: createTempFile makes the file owner-only, and the move carries
+        // that through, so sealed replays are 0600 rather than umask default. A replay is a
+        // complete record of everything the bot saw, chat included; on a shared host that is the
+        // permission it should have had anyway. Widen it deliberately if you are serving them.
+        Path tmp = Files.createTempFile(dir, "clef-", ".mcpr.part");
         try (ZipOutputStream zip = new ZipOutputStream(new BufferedOutputStream(Files.newOutputStream(tmp)))) {
             zip.putNextEntry(new ZipEntry(ENTRY_RECORDING));
             copyPrefix(scratch, extent.bytes(), zip);

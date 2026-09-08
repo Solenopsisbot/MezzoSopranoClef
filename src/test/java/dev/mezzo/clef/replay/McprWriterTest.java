@@ -120,6 +120,42 @@ class McprWriterTest {
                 readJsonArrayFirst(marked, "markers.json").get("name").getAsString());
     }
 
+    /**
+     * An auto-save and a replay.save can seal the same recording at the same moment, and two saves
+     * can be given the same name. A shared, deterministic temp file would let two zip streams
+     * interleave into one path and the losing move would clobber a result already reported.
+     */
+    @Test
+    void concurrentSealsToOneNameProduceOneValidFile(@TempDir Path dir) throws Exception {
+        Path out = dir.resolve("contended.mcpr");
+        int sealers = 8;
+        try (McprWriter writer = new McprWriter(dir.resolve("scratch.tmcpr"))) {
+            writer.write(0, new byte[] {0x02}, 0, 1);
+            writer.write(1, new byte[] {0x10}, 0, 1);
+
+            java.util.concurrent.CountDownLatch go = new java.util.concurrent.CountDownLatch(1);
+            java.util.concurrent.ExecutorService pool =
+                    java.util.concurrent.Executors.newFixedThreadPool(sealers);
+            List<java.util.concurrent.Future<?>> runs = new ArrayList<>();
+            for (int i = 0; i < sealers; i++) {
+                runs.add(pool.submit(() -> {
+                    go.await();
+                    return writer.seal(out, meta(1), List.of());
+                }));
+            }
+            go.countDown();
+            for (java.util.concurrent.Future<?> run : runs) run.get(30, java.util.concurrent.TimeUnit.SECONDS);
+            pool.shutdownNow();
+        }
+
+        assertEquals(2, readRecording(out).size(), "the surviving file must be a whole replay");
+        assertEquals("MCPR", readJson(out, "metaData.json").get("fileFormat").getAsString());
+        try (java.util.stream.Stream<Path> leftovers = Files.list(dir)) {
+            assertTrue(leftovers.noneMatch(p -> p.getFileName().toString().endsWith(".part")),
+                    "every temp file should have been moved or cleaned up");
+        }
+    }
+
     @Test
     void leavesNoPartFileBehindOnSuccess(@TempDir Path dir) throws IOException {
         Path out = dir.resolve("clean.mcpr");
