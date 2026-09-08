@@ -504,6 +504,34 @@ class ClefClient:
         """Private-message a player using whichever of msg/tell/w/whisper this server has."""
         return self.call("whisper", player=player, text=text)
 
+    # ---- replay recording (ReplayMod .mcpr) -----------------------------------------
+
+    def replay_record(self, enabled: bool = True) -> Dict[str, Any]:
+        """Arm or disarm packet capture.
+
+        This takes effect on the **next** connection, not this one: a replay has to begin at a
+        connection's login or it cannot be played back at all. Arm it, then ``connect``.
+        """
+        return self.call("replay.record", enabled=enabled)
+
+    def replay_save(self, name: Optional[str] = None) -> Dict[str, Any]:
+        """Seal everything recorded so far into a finished ``.mcpr`` and keep recording.
+
+        Safe to call repeatedly mid-run — each call produces a complete replay ending at that
+        moment, which is how you watch a bot that has not stopped playing.
+        """
+        return self.call("replay.save", **({"name": name} if name else {}))
+
+    def replay_marker(self, name: Optional[str] = None) -> Dict[str, Any]:
+        """Drop a named pip on the replay timeline at the bot's current position."""
+        return self.call("replay.marker", **({"name": name} if name else {}))
+
+    def replay_status(self) -> Dict[str, Any]:
+        return self.call("replay.status")
+
+    def replay_list(self) -> Dict[str, Any]:
+        return self.call("replay.list")
+
     def batch(self, commands: List[Dict[str, Any]], continue_on_error: bool = False) -> Dict[str, Any]:
         """Run several commands in order over one round-trip:
         ``bot.batch([{"cmd": "setSlot", "args": {"slot": 0}}, {"cmd": "use", "args": {}}])``"""

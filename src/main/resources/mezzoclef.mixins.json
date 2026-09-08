@@ -15,7 +15,9 @@
     "client.BossBarHudAccessor",
     "client.RenderSystemNoGlMixin",
     "client.SoundDisableMixin",
-    "client.ClientPlayNetworkHandlerEventsMixin"
+    "client.ClientPlayNetworkHandlerEventsMixin",
+    "client.ConnectionReplayMixin",
+    "client.PacketDecoderAccessor"
   ],
   "injectors": {
     "defaultRequire": 1

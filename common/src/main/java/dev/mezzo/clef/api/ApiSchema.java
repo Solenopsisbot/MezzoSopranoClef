@@ -214,6 +214,25 @@ public final class ApiSchema {
             c("combat.stop").result("{stopped,kind?}"),
             c("combat.status").result("{busy,kind?}"),
 
+            // --- replay recording (ReplayMod .mcpr) ---
+            // record/arm rather than start/stop: a replay has to begin at a connection's login, so
+            // "start" would be a promise this cannot keep mid-session. See ReplayCommands.
+            c("replay.status").result("{supported,armed,recording,dir,autoSave,maxBytes,serverName,"
+                    + "mcVersion,protocol,selfId,selfTrack:off|pending|verified|failed,"
+                    + "selfTrackDetail?,durationMs?,packets?,selfPackets?,bytes?,startedAt?,markers?,"
+                    + "pipeline:[netty handler names, tap must sit just before 'decoder']} "
+                    + "— selfTrack is the bot's own body, which is synthesized rather than captured "
+                    + "because a server never sends you your own spawn or movement"),
+            c("replay.list").result("{dir,replays:[{name,path,bytes,modified}]} — newest first"),
+            c("replay.record").opt("enabled", Type.BOOL, "true")
+                    .result("{supported,armed,recording,ended,note?} — takes effect on the NEXT "
+                            + "connection; arming mid-session cannot recover the login packets"),
+            c("replay.save").opt("name", Type.STRING)
+                    .result("{saved,name,path,durationMs,packets,bytes} — a complete, openable "
+                            + "replay of everything so far; recording carries on past it"),
+            c("replay.marker").opt("name", Type.STRING)
+                    .result("{added,marker:{name?,time,x,y,z,yaw,pitch,roll}}"),
+
             // --- containers / screens / inventory transfer ---
             c("container").result("{handler,syncId,screen,screenClass,slots,cursor,trades?}"),
             c("clickSlot").req("slot", Type.INT).opt("button", Type.INT, "0")
@@ -315,6 +334,15 @@ public final class ApiSchema {
             e("baritone.log", "a line Baritone would have printed to the chat HUD — find results, "
                     + "eta, 'No known locations of ...', build progress, missing materials")
                     .f("text", Type.STRING),
+            e("replay.started", "packet capture began — a server connection reached login success")
+                    .f("serverName", Type.STRING).f("scratch", Type.STRING),
+            e("replay.saved", "a .mcpr was sealed (by replay.save, or automatically at disconnect)")
+                    .f("name", Type.STRING).f("path", Type.STRING).f("durationMs", Type.INT)
+                    .f("packets", Type.LONG).f("bytes", Type.LONG),
+            e("replay.stopped", "packet capture ended. reason is disconnected | disarmed | "
+                    + "superseded | size_limit | shutdown | error")
+                    .f("reason", Type.STRING).f("durationMs", Type.INT).f("packets", Type.LONG)
+                    .f("bytes", Type.LONG).opt("saved", Type.STRING).opt("error", Type.STRING),
             e("auth.prompt", "device-code login: show this to the user (always delivered)")
                     .f("verificationUri", Type.STRING).f("userCode", Type.STRING),
             e("auth.ok", "login succeeded (always delivered)"),

@@ -993,6 +993,55 @@
       "result": "{busy,kind?}"
     },
     {
+      "name": "replay.status",
+      "summary": "replay recording state: supported, armed, recording, size, and the netty pipeline the tap sits in",
+      "args": [],
+      "result": "{supported,armed,recording,dir,autoSave,maxBytes,serverName,mcVersion,protocol,selfId,selfTrack:off|pending|verified|failed,selfTrackDetail?,durationMs?,packets?,selfPackets?,bytes?,startedAt?,markers?,pipeline:[netty handler names, tap must sit just before 'decoder']} — selfTrack is the bot's own body, which is synthesized rather than captured because a server never sends you your own spawn or movement"
+    },
+    {
+      "name": "replay.list",
+      "summary": "sealed .mcpr files on disk, newest first",
+      "args": [],
+      "result": "{dir,replays:[{name,path,bytes,modified}]} — newest first"
+    },
+    {
+      "name": "replay.record",
+      "summary": "arm or disarm packet capture {enabled} — takes effect on the NEXT connection",
+      "args": [
+        {
+          "name": "enabled",
+          "type": "bool",
+          "required": false,
+          "default": "true"
+        }
+      ],
+      "result": "{supported,armed,recording,ended,note?} — takes effect on the NEXT connection; arming mid-session cannot recover the login packets"
+    },
+    {
+      "name": "replay.save",
+      "summary": "seal everything recorded so far into a playable .mcpr {name?} — recording continues",
+      "args": [
+        {
+          "name": "name",
+          "type": "string",
+          "required": false
+        }
+      ],
+      "result": "{saved,name,path,durationMs,packets,bytes} — a complete, openable replay of everything so far; recording carries on past it"
+    },
+    {
+      "name": "replay.marker",
+      "summary": "drop a named marker on the replay timeline at the bot's position {name?}",
+      "args": [
+        {
+          "name": "name",
+          "type": "string",
+          "required": false
+        }
+      ],
+      "result": "{added,marker:{name?,time,x,y,z,yaw,pitch,roll}}"
+    },
+    {
       "name": "container",
       "summary": "read the open container: slots, cursor, and villager trades",
       "args": [],
@@ -1814,6 +1863,89 @@
           "name": "text",
           "type": "string",
           "required": true
+        }
+      ]
+    },
+    {
+      "name": "replay.started",
+      "description": "packet capture began — a server connection reached login success",
+      "fields": [
+        {
+          "name": "serverName",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "scratch",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "replay.saved",
+      "description": "a .mcpr was sealed (by replay.save, or automatically at disconnect)",
+      "fields": [
+        {
+          "name": "name",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "path",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "durationMs",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "packets",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "bytes",
+          "type": "long",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "replay.stopped",
+      "description": "packet capture ended. reason is disconnected | disarmed | superseded | size_limit | shutdown | error",
+      "fields": [
+        {
+          "name": "reason",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "durationMs",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "packets",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "bytes",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "saved",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "error",
+          "type": "string",
+          "required": false
         }
       ]
     },

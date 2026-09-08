@@ -4,6 +4,10 @@
 # mode, speaking the server's protocol through ViaFabricPlus), and runs the WebSocket probe to
 # assert it joined the world and can take a GPU-free screenshot.
 #
+# Replay recording is armed in the generated config, so every run of this script also proves the
+# .mcpr recorder end to end — and, when MC_VERSION names an old release, that the tap really does
+# sit downstream of ViaFabricPlus's translation. autoSave is off: the probe seals what it wants.
+#
 # Requires: a JDK able to run the MC server for that version (see scripts/pick_server_java.py),
 # Python 3, network access. The bot client is launched via `gradlew :runClient`; first run
 # downloads MC assets and can take a while. For the whole version matrix in one client boot,
@@ -87,6 +91,7 @@ cat > "$ROOT/$CLEF_RUN_DIR/config/mezzoclef.json" <<EOF
   "connection": { "autoConnect": true, "serverHost": "127.0.0.1", "serverPort": $MC_PORT, "serverVersion": "$SERVER_VERSION" },
   "control": { "enabled": true, "host": "127.0.0.1", "port": $WS_PORT, "authToken": "$CLEF_WS_TOKEN" },
   "screenshot": { "backend": "software", "defaultWidth": 640, "defaultHeight": 360, "maxRayDistance": 96 },
+  "replay": { "enabled": true, "dir": "replay-e2e", "autoSave": false, "maxSizeMb": 64 },
   "headless": true,
   "headlessLoopSleepMs": 5
 }

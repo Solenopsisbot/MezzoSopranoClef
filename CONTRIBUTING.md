@@ -32,7 +32,8 @@ heavier than unit tests and are best run before releases or after touching launc
 interaction code:
 
 ```bash
-scripts/e2e.sh                       # newest-version server (the client's own version)
+scripts/e2e.sh                       # newest-version server (the client's own version); also
+                                     # seals a .mcpr and reads it back
 MC_VERSION=1.12.2 scripts/e2e.sh     # same smoke test against an old server (via ViaFabricPlus)
 python3 scripts/verify_live.py
 python3 scripts/verify_events.py
@@ -108,6 +109,44 @@ example: `Ballistics` is arithmetic, so it sits in `common/` and is shared verba
 dragon *part* id cannot be resolved from the level below that; the dragon's own id still works, and
 the part to hit comes from `getSubEntities()`), and the `Hotbar` helper only exists in the 1.20.1+
 modules (so below that the bow must already be on the hotbar, and the error says exactly that).
+
+### Porting the replay recorder to another target
+
+The `.mcpr` recorder is deliberately almost all version-neutral: `common/dev/mezzo/clef/replay/`
+copies bytes out of the netty pipeline and writes a zip, and names no Minecraft type at all.
+Bringing it to a new target is three small things in that release's module:
+
+1. A `Connection` mixin injecting at `channelActive` TAIL that calls
+   `ReplayRecorder.get().install(ctx.pipeline())`. `channelActive` exists unchanged on every
+   release from 1.14.4 up. The pipeline slot it inserts in front of has two names and the recorder
+   handles both: on 1.20.1 and older it is `decoder` from the start, while from 1.20.2 the codec
+   slot is created empty as `inbound_config` and only *renamed* to `decoder` when a protocol is
+   bound — via `ChannelPipeline.replace`, which keeps the position, so a tap inserted before
+   `inbound_config` is still immediately before `decoder` afterwards. At `channelActive` it is
+   always still `inbound_config` on those releases, which is exactly the kind of thing that
+   compiles, boots, and then quietly records nothing.
+2. A `ReplayMetadataSource` for that release — the tab-list walk, `SharedConstants`, and the
+   current server address. ~60 lines.
+3. A `SelfTrack` for that release, which synthesizes the bot's own body (a server never sends you
+   your own spawn or movement, so a pure capture has a hole where the recorder stood). This is the
+   version-sensitive one: it names half a dozen clientbound packet classes, and how you *encode*
+   them differs by era — on 1.20.2+ take the bound `ProtocolInfo` off the `decoder` handler
+   (`PacketDecoderAccessor`) and use `codec().encode`; older releases have `Packet.write(buf)` and
+   an id from the `ConnectionProtocol`. Keep the encode/decode round-trip check: bytes that encode
+   *wrong* are what corrupts a replay, and nothing else catches them.
+4. `ReplayRecorder.get().enableOnThisTarget()` in that module's `ClefClient`, plus the per-tick
+   `ReplayMetadataSource.tick(mc)` and `SelfTrack.tick(mc)` calls.
+
+The commands are registered from `ControlServer` and therefore already exist on every target;
+without those three they answer `{supported:false}` and say why, which is the intended behaviour
+for a half-ported feature rather than something to hide.
+
+Two things a compile will not tell you, both asserted by `scripts/e2e.sh`: whether the mixin
+actually applied (a recording that never starts looks exactly like a quiet server), and whether the
+tap landed **after** ViaFabricPlus's translation handlers and immediately **before** `decoder`. Get
+that order wrong and the file contains the old server's packets wearing the new version's metadata
+— it opens, and then plays back as garbage. `replay.status` reports the live handler order for
+exactly this reason.
 
 A compile is not a pass: mixin targets are only checked at runtime, so a module is not
 `runtime-verified` until `scripts/verify_native.sh <mc>` has actually joined a server with it.

@@ -53,7 +53,10 @@ public final class ControlServer implements WsServer.Listener {
             "status", "auth.status", "protocol", "players", "screenshot", "nav.status",
             "inventory", "entities", "blockAt", "container", "screen", "serverui", "findItem",
             "findBlocks", "blocksIn", "target", "registry", "nav.check",
-            "recipes", "craftable", "chatHistory", "combat.status");
+            "recipes", "craftable", "chatHistory", "combat.status",
+            // Reading recording state and listing files on disk actuates nothing; replay.record,
+            // replay.save and replay.marker all change something and stay out.
+            "replay.status", "replay.list");
 
     /** Shared service handles (screenshots, navigation) reachable from any command. */
     public final ClefServices services;
@@ -68,6 +71,7 @@ public final class ControlServer implements WsServer.Listener {
         CoreCommands.registerAll(dispatcher);
         dev.mezzo.clef.api.commands.ActionCommands.registerAll(dispatcher);
         dev.mezzo.clef.api.commands.UiCommands.registerAll(dispatcher);
+        dev.mezzo.clef.api.commands.ReplayCommands.registerAll(dispatcher);
         dev.mezzo.clef.api.commands.WorldCommands.registerAll(dispatcher);
         dev.mezzo.clef.api.commands.CraftCommands.registerAll(dispatcher);
         dev.mezzo.clef.api.commands.CombatCommands.registerAll(dispatcher);
