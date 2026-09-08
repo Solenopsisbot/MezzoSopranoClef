@@ -218,7 +218,8 @@ public final class ApiSchema {
             c("container").result("{handler,syncId,screen,screenClass,slots,cursor,trades?}"),
             c("clickSlot").req("slot", Type.INT).opt("button", Type.INT, "0")
                     .opt("mode", Type.STRING, "pickup").result("{clicked,mode,cursor}"),
-            c("closeScreen").result("{closed}"),
+            c("closeScreen").result("{closed,wasOpen,screen,stillOpen?} — closed is read back "
+                    + "after the attempt, not assumed; stillOpen names what refused to go"),
             c("selectTrade").req("index", Type.INT).result("{selected}"),
             c("screen").result("{screen,screenClass,widgets:[{index,type,text,x,y,active,visible}]}"),
             c("clickButton").req("index", Type.INT).result("{clicked,text}"),
@@ -226,8 +227,10 @@ public final class ApiSchema {
             c("serverui").result("{title,bossBars,scoreboards,sidebar}"),
             c("findItem").req("item", Type.STRING).result("{total,slots:[{slot,count}]}"),
             c("equip").req("item", Type.STRING)
-                    .result("{equipped,changed,slot?,fromSlot?} — changed:false means it was already "
-                            + "worn and nothing was clicked"),
+                    .result("{equipped,changed,worn,moved,slot?,fromSlot?,detail?} — changed is read "
+                            + "back from the equipment slot, never assumed from the click: already worn "
+                            + "is {changed:false,worn:true}, and a shift-click with nowhere to go is "
+                            + "{changed:false,moved:false,detail}"),
             c("moveToHotbar").req("item", Type.STRING).opt("slot", Type.INT).result("{slot,moved,fromSlot}"),
             c("deposit").req("item", Type.STRING).result("{deposited}"),
             c("withdraw").req("item", Type.STRING).result("{withdrew}"),

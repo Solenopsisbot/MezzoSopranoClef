@@ -4,6 +4,7 @@ import net.minecraft.client.gui.screens.ConnectScreen;
 import net.minecraft.client.gui.screens.DeathScreen;
 import net.minecraft.client.gui.screens.DisconnectedScreen;
 import net.minecraft.client.gui.screens.GenericMessageScreen;
+import net.minecraft.client.gui.screens.PauseScreen;
 import net.minecraft.client.gui.screens.ReceivingLevelScreen;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.TitleScreen;
@@ -35,9 +36,9 @@ public final class ScreenNames {
     public static final String NONE = "none";
 
     /**
-     * One of: {@code none | title | connect | disconnected | death | downloading | message |
-     * inventory | crafting | furnace | anvil | enchanting | merchant | sign | book | container |
-     * other}.
+     * One of: {@code none | title | connect | disconnected | death | pause | downloading |
+     * message | inventory | crafting | furnace | anvil | enchanting | merchant | sign | book |
+     * container | other}.
      *
      * <p>{@code container} is the catch-all for a server-synced menu (chest, shulker, hopper, a
      * modded machine) that isn't one of the specifically-named ones — anything drivable with
@@ -49,6 +50,10 @@ public final class ScreenNames {
         if (screen instanceof ConnectScreen) return "connect";
         if (screen instanceof DisconnectedScreen) return "disconnected";
         if (screen instanceof DeathScreen) return "death";
+        // Worth its own name rather than falling into "other": the pause screen is the
+        // one screen a headless bot can end up behind without ever asking for it, and it
+        // blocks the whole input path while it is up.
+        if (screen instanceof PauseScreen) return "pause";
         if (screen instanceof ReceivingLevelScreen) return "downloading";
         if (screen instanceof GenericMessageScreen) return "message";
         if (screen instanceof InventoryScreen) return "inventory";
