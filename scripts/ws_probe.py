@@ -3,7 +3,8 @@
 Stdlib-only WebSocket probe for the MezzoSopranoClef control plane.
 
 Drives an end-to-end assertion against a running bot: waits for it to join the world,
-checks the player list, takes a (GPU-free) screenshot and verifies it's a real PNG.
+checks the player list, takes a (GPU-free) screenshot and verifies it's a real PNG, and —
+when the bot was configured with replay recording armed — seals a .mcpr and reads it back.
 
 Env:
   CLEF_WS_HOST (default 127.0.0.1)
@@ -13,6 +14,7 @@ Env:
   CLEF_OUT (default .)              - where to save the screenshot
   CLEF_CONNECT_TIMEOUT (default 90) - seconds to wait for the control plane to come up
   CLEF_WORLD_TIMEOUT (default 120)  - seconds to wait for the bot to enter a world
+  CLEF_EXPECT_REPLAY (unset)        - require replay capture to be armed rather than skipping it
 
 Exit code 0 = all assertions passed.
 """
@@ -181,6 +183,135 @@ def wait_for_event(s, name, predicate, timeout=30):
     raise RuntimeError(f"no '{name}' event matching predicate within {timeout}s")
 
 
+def check_replay(s, native):
+    """Assert the .mcpr recorder produced a file ReplayMod could actually open.
+
+    Everything about this feature is invisible to the compiler: whether the Connection mixin
+    applied, whether the tap landed in the right place in the netty pipeline, and whether the
+    bytes it copied are framed the way the format says. So read the file back rather than
+    trusting the command's own success report.
+    """
+    st = call(s, "replay.status")
+    if not st.get("supported"):
+        print(f"[probe] replay check skipped: no replay tap on {native}")
+        return
+    # Recording is off in the default config, and the README documents running this probe against a
+    # plain `./gradlew :runClient`. Skip there; require it where the harness armed it (e2e.sh), so
+    # a regression that quietly stops arming still fails the build rather than being skipped.
+    if not st.get("armed"):
+        if not os.environ.get("CLEF_EXPECT_REPLAY"):
+            print("[probe] replay checks skipped: capture is not armed "
+                  "(set replay.enabled, or CLEF_EXPECT_REPLAY=1 to require it)")
+            return
+        raise AssertionError(f"CLEF_EXPECT_REPLAY is set but capture is not armed: {st}")
+    assert st.get("recording"), (
+        "no recording in progress — the tap never saw a login success, which means either the "
+        f"Connection mixin did not apply or it was inserted too late. status={st}")
+
+    # The pipeline order IS the claim: the tap must be the handler immediately before Minecraft's
+    # decoder, and anything ViaFabricPlus installed must be upstream of it, or what we recorded is
+    # the old server's packets wearing the new version's metadata.
+    pipeline = st.get("pipeline") or []
+    assert "clef-replay-tap" in pipeline and "decoder" in pipeline, f"tap not in pipeline: {pipeline}"
+    tap, decoder = pipeline.index("clef-replay-tap"), pipeline.index("decoder")
+    assert tap == decoder - 1, f"tap is not immediately before the decoder: {pipeline}"
+    # Only the inbound half matters: via-encoder sits after the decoder by design.
+    via = [i for i, h in enumerate(pipeline) if "via" in h.lower() and i < decoder]
+    assert all(i < tap for i in via), (
+        f"a ViaFabricPlus handler sits after the tap, so the recording is in the SERVER's protocol, "
+        f"not this client's: {pipeline}")
+
+    # The bot's own body is synthesized, not captured — a server never sends you your own spawn or
+    # movement. "verified" means one synthetic packet was encoded and decoded back with the
+    # connection's own codec, which is the only check available before a human opens the file.
+    deadline = time.time() + 30
+    while time.time() < deadline and st.get("selfTrack") in ("pending", None):
+        time.sleep(1)
+        st = call(s, "replay.status")
+    assert st.get("selfTrack") == "verified", (
+        f"the bot's body is not being written into the replay: selfTrack={st.get('selfTrack')!r} "
+        f"{st.get('selfTrackDetail') or ''}")
+    before = st.get("selfPackets", 0)
+    assert before > 0, "self-tracking verified but wrote nothing"
+
+    # Move the head and confirm the per-tick path runs, not just the one-off spawn burst.
+    call(s, "look", yaw=(st.get("selfId", 0) % 2) * 90.0 + 90.0)
+    time.sleep(2)
+    after = call(s, "replay.status").get("selfPackets", 0)
+    assert after > before, (
+        f"self-tracking wrote the spawn ({before} packets) and then stopped: still {after} after "
+        f"the bot turned")
+    print(f"[probe] self-body OK: {after} synthetic packets, verified round-trip")
+
+    call(s, "replay.marker", name="probe")
+    saved = call(s, "replay.save", name="e2e-probe")
+    assert saved.get("saved") and saved.get("packets", 0) > 0, f"nothing was recorded: {saved}"
+    print(f"[probe] replay saved: {saved['packets']} packets, {saved['bytes']} bytes "
+          f"-> {saved['path']}")
+
+    meta, markers, packets = read_mcpr(saved["path"])
+    assert meta.get("fileFormat") == "MCPR", f"bad metadata: {meta}"
+    assert meta.get("protocol"), "file format 14 requires a protocol number"
+    # The recording is in the CLIENT's protocol even against an old server, because the tap reads
+    # downstream of the translation. This is the assertion that makes that claim checkable.
+    assert meta.get("mcversion") == native, (
+        f"replay claims mcversion={meta.get('mcversion')!r} but this client is {native!r}")
+    assert packets and packets[0][0] == 0x02, (
+        f"a replay must open with login success (id 2); got id {packets[0][0] if packets else None}")
+    assert len(packets) > 10, f"suspiciously short recording: {len(packets)} packets"
+    assert any(m.get("name") == "probe" for m in markers), f"marker missing: {markers}"
+    # The recording keeps growing while the zip is written, so the count in the reply must come
+    # from the seal rather than from the live counter — otherwise it describes a file nobody has.
+    assert saved["packets"] == len(packets), (
+        f"replay.save reported {saved['packets']} packets but the file holds {len(packets)}")
+    print(f"[probe] replay OK: {len(packets)} framed packets, mcversion={meta['mcversion']}, "
+          f"protocol={meta['protocol']}")
+
+    # Ending a recording hands the seal AND its events to the clef-replay worker, because the
+    # threads that can end one (netty IO, the client tick) must not wait on a deflate. Disarm and
+    # require both events plus the file, so that hand-off is exercised rather than assumed.
+    call(s, "subscribe", events=["replay.stopped", "replay.saved"])
+    call(s, "replay.record", enabled=False)
+    stopped = wait_for_event(s, "replay.stopped", lambda d: d.get("reason") == "disarmed", timeout=30)
+    assert stopped.get("autoSaving") is True, f"autoSave was on but the stop says {stopped}"
+    auto = wait_for_event(s, "replay.saved", lambda d: d.get("name") != saved["name"], timeout=60)
+    listed = {r["name"] for r in call(s, "replay.list")["replays"]}
+    assert auto["name"] in listed, f"auto-saved {auto['name']} missing from {sorted(listed)}"
+    assert call(s, "replay.status").get("recording") is False
+    print(f"[probe] async auto-save OK: {auto['name']} ({auto['packets']} packets) sealed off-thread")
+
+
+def read_mcpr(path):
+    """Decode a .mcpr the way ReplayStudio does: metaData.json, markers.json, and the raw
+    [int32 time][int32 len][varint id + body] stream in recording.tmcpr."""
+    import zipfile
+    with zipfile.ZipFile(path) as z:
+        meta = json.loads(z.read("metaData.json"))
+        markers = json.loads(z.read("markers.json")) if "markers.json" in z.namelist() else []
+        raw = z.read("recording.tmcpr")
+    packets, off = [], 0
+    while off + 8 <= len(raw):
+        stamp, length = struct.unpack_from(">ii", raw, off)
+        off += 8
+        assert 0 < length <= len(raw) - off, f"truncated frame at {off}: declared {length} bytes"
+        body = raw[off:off + length]
+        off += length
+        # Packet id is a varint; only its first byte matters for the login-success check.
+        packets.append((varint(body), stamp))
+    assert off == len(raw), f"{len(raw) - off} trailing bytes — the framing does not line up"
+    return meta, markers, packets
+
+
+def varint(body):
+    value, shift = 0, 0
+    for byte in body[:5]:
+        value |= (byte & 0x7F) << shift
+        if not byte & 0x80:
+            return value
+        shift += 7
+    return -1
+
+
 def main():
     host = os.environ.get("CLEF_WS_HOST", "127.0.0.1")
     port = int(os.environ.get("CLEF_WS_PORT", "8731"))
@@ -289,6 +420,8 @@ def main():
         print(f"[probe] blockUpdate event OK (packet mixin is wired on {native})")
     else:
         print(f"[probe] blockUpdate check skipped: no packet mixin on {native} (needs 1.20.1+)")
+
+    check_replay(s, native)
 
     print("[probe] PASS")
     return 0
