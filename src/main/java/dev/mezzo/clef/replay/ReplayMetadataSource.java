@@ -30,6 +30,8 @@ public final class ReplayMetadataSource {
     private static int ticks;
     /** Last tab-list walk, reused between rebuilds so the per-tick refresh stays cheap. */
     private static List<String> players = List.of();
+    /** Which recording {@link #players} was walked for; a new one must not inherit it. */
+    private static long playersSession;
 
     /** Called from the client tick. Skipped entirely while replay capture is disarmed. */
     public static void tick(Minecraft mc) {
@@ -46,6 +48,17 @@ public final class ReplayMetadataSource {
         // meant a replay sealed early in a session carried the *previous* server's name, player
         // list and selfId — or nothing at all on a first connect. A tick-wide window closes that;
         // the recorder's session check covers what is left.
+        //
+        // The cached player list gets the same treatment: it is the one thing here that outlives a
+        // connection, and a replay of server B sealed in its first second must not carry server A's
+        // UUIDs. A session change forces a fresh walk (or an honest empty list) before the first
+        // snapshot of the new recording is pushed.
+        long current = recorder.sessionId();
+        if (current != playersSession) {
+            playersSession = current;
+            players = List.of();
+            ticks = PLAYER_LIST_TICKS;
+        }
         if (++ticks >= PLAYER_LIST_TICKS) {
             ticks = 0;
             players = readPlayers(mc);
