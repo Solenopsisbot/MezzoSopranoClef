@@ -32,7 +32,8 @@ import io.netty.channel.ChannelInboundHandlerAdapter;
  * sends, so the same gate also quietly ignores the server-list pings the {@code auto} protocol
  * detector makes.
  *
- * <p>Everything after that is recorded verbatim, configuration phase included.</p>
+ * <p>Everything after that is recorded verbatim, configuration phase included — and the gate never
+ * re-arms, because past the login phase that same id means something else entirely.</p>
  */
 public final class ReplayTap extends ChannelInboundHandlerAdapter {
 
@@ -49,30 +50,47 @@ public final class ReplayTap extends ChannelInboundHandlerAdapter {
      */
     public interface Sink {
         /**
-         * Opens a recording, handing over the pipeline the tap is living in. False means "not now",
-         * and the tap stays dormant for this connection.
+         * Opens a recording, handing over the pipeline the tap is living in. Returns the new
+         * session's id, or 0 for "not now", which leaves the tap dormant.
+         *
+         * <p>Every later call carries that id back. The bot's own reconnect path can leave two
+         * sockets open at once — {@code connect} goes straight to {@code ConnectScreen}, and
+         * {@code disconnect} to {@code Minecraft.disconnect}, neither of which closes the old
+         * channel — so the server only drops the first connection after the second has logged in.
+         * Without an id, the losing tap's remaining packets would be appended to the winner's file
+         * and its {@code channelInactive} would end the winner's recording.</p>
          *
          * <p>The pipeline comes along because a recording needs more than the bytes on the wire: to
          * put the bot's own body in the replay we have to <i>encode</i> packets the server never
          * sent, and the only encoder guaranteed to agree with what we are recording is the one
          * sitting in the {@code decoder} slot right next to us.</p>
          */
-        boolean beginSession(io.netty.channel.ChannelPipeline pipeline);
+        long beginSession(io.netty.channel.ChannelPipeline pipeline);
 
-        /** Appends a packet. False means the recording is over and the tap should stop. */
-        boolean record(byte[] packet);
+        /** Appends a packet. False means this tap's recording is over and it should stop. */
+        boolean record(long session, byte[] packet);
 
-        /** The connection went away. */
-        void endSession(String reason);
+        /** The connection went away. Ignored if {@code session} is no longer the current one. */
+        void endSession(long session, String reason);
 
         /** Something in the recorder threw; the connection itself is fine. */
-        void abort(Throwable cause);
+        void abort(long session, Throwable cause);
     }
 
     private final Sink recorder;
 
-    /** False until the login success packet has gone past; nothing before it is recorded. */
-    private boolean live;
+    /** The recording this tap opened, or 0 before login success and after it has finished. */
+    private long session;
+    /**
+     * Set once this connection's recording is over, for any reason, and never cleared.
+     *
+     * <p>The login-success gate below is one-shot, and has to be. Clientbound id {@code 0x02} in
+     * the <i>play</i> protocol is {@code ClientboundAnimatePacket} — any nearby entity swinging an
+     * arm — so a gate that re-arms would open a second "recording" whose first packet is an
+     * animate, producing an {@code .mcpr} that opens and cannot play. With {@code autoSave} on and
+     * a size cap set, it would do that in a loop: fill, seal, retrigger on the next swing.</p>
+     */
+    private boolean finished;
 
     public ReplayTap(Sink recorder) {
         this.recorder = recorder;
@@ -87,8 +105,8 @@ public final class ReplayTap extends ChannelInboundHandlerAdapter {
         } catch (Throwable t) {
             // A recorder fault must never cost the bot its connection: drop the recording, keep
             // the packet moving.
-            recorder.abort(t);
-            live = false;
+            recorder.abort(session, t);
+            stop();
         }
         ctx.fireChannelRead(msg);
     }
@@ -97,21 +115,30 @@ public final class ReplayTap extends ChannelInboundHandlerAdapter {
     private void capture(ChannelHandlerContext ctx, ByteBuf buf) {
         int length = buf.readableBytes();
         if (length <= 0) return;
-        if (!live) {
+        if (session == 0L) {
+            if (finished) return;
             if (peekVarInt(buf) != LOGIN_SUCCESS_ID) return;
-            if (!recorder.beginSession(ctx.pipeline())) return;
-            live = true;
+            long opened = recorder.beginSession(ctx.pipeline());
+            if (opened == 0L) return;
+            session = opened;
         }
         byte[] copy = new byte[length];
         buf.getBytes(buf.readerIndex(), copy);
-        if (!recorder.record(copy)) live = false;
+        if (!recorder.record(session, copy)) stop();
+    }
+
+    /** This connection is done recording, permanently. */
+    private void stop() {
+        session = 0L;
+        finished = true;
     }
 
     @Override
     public void channelInactive(ChannelHandlerContext ctx) throws Exception {
-        if (live) {
-            live = false;
-            recorder.endSession("disconnected");
+        if (session != 0L) {
+            long ending = session;
+            stop();
+            recorder.endSession(ending, "disconnected");
         }
         ctx.fireChannelInactive();
     }

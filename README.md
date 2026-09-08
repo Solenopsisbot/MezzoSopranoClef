@@ -172,7 +172,18 @@ Two limits worth knowing before you rely on it:
 
 Off by default (`replay.enabled`), because a recording is the entire inbound packet stream: cheap in
 CPU, not cheap in disk. `replay.maxSizeMb` stops a forgotten bot filling a volume, `replay.autoSave`
-seals automatically when the connection ends, and `replay.list` says what is already there.
+seals automatically when the connection ends — including on the SIGTERM every script here stops the
+bot with — and `replay.list` says what is already there.
+
+Sealed replays are written `0600`. A replay is a complete record of everything the bot saw, chat
+included, and these run on shared hosts.
+
+Automatic seals run on a `clef-replay` worker rather than wherever the recording happened to stop.
+Deflating half a gigabyte takes ten to twenty seconds, and the two threads that can trip the size
+cap are the netty IO thread (which is upstream of the decoder, so blocking it stops keep-alives and
+the server kicks the bot for timing out) and the client tick (which would visibly freeze the game).
+`replay.save` still seals on the calling thread: the control plane asked for a file and is waiting
+for its path.
 
 ### Two things worth knowing about Baritone
 

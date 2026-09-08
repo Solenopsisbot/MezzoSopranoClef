@@ -17,6 +17,10 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Per-client packet recording, in ReplayMod's own {@code .mcpr} format.
@@ -39,26 +43,45 @@ import java.util.Locale;
  * the instant you asked, and the next one carries on from the same recording.
  *
  * <h2>Threading</h2>
- * Packets arrive on the netty IO thread, saves come from a control-plane thread, and metadata is
- * refreshed from the client thread ({@link #refresh}). {@link McprWriter} is synchronized, the
- * session reference is volatile, and nothing in {@code common/} ever touches a Minecraft object —
- * which is why the client-thread half is a snapshot pushed in rather than a lookup pulled out.
+ * Four threads reach this class and none of them may be made to wait on a disk:
+ * <ul>
+ *   <li><b>netty IO</b> — {@link #beginSession}, {@link #record}, {@link #endSession}. Blocking
+ *       here stops the connection dead: the tap sits upstream of the decoder, so nothing inbound is
+ *       delivered and no keep-alive reply is flushed, and vanilla kicks an unanswered keep-alive
+ *       after 15s. A 512 MiB deflate is comfortably longer than that.</li>
+ *   <li><b>client tick</b> — {@link #inject}, {@link #pose}, {@link #refresh}, {@link #marker}.
+ *       Blocking here freezes combat, crafting and input.</li>
+ *   <li><b>control plane</b> — {@link #save}, {@link #status}, {@link #list}, {@link #setArmed}.
+ *       This one is allowed to block; the caller asked for a file and is waiting for its path.</li>
+ *   <li><b>{@code clef-replay} worker</b> — every automatic seal and <i>every</i> event emission.
+ *       Both are unbounded-latency operations (a deflate; a socket write to a subscriber that has
+ *       stopped reading), so neither belongs on a thread the game needs back.</li>
+ * </ul>
+ * Nothing in {@code common/} ever touches a Minecraft object, which is why the client-thread half
+ * is a snapshot pushed in rather than a lookup pulled out.
  */
 public final class ReplayRecorder implements ReplayTap.Sink {
 
     private static final ReplayRecorder INSTANCE = new ReplayRecorder();
 
+    /**
+     * Milliseconds included deliberately. Two seals inside the same second — an auto-save racing a
+     * {@code replay.save}, or two quick saves — would otherwise resolve to the same file name.
+     */
     private static final DateTimeFormatter STAMP =
-            DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss").withZone(ZoneId.systemDefault());
+            DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss.SSS").withZone(ZoneId.systemDefault());
 
     /** Written into {@code metaData.json} so a replay's origin is obvious in ReplayStudio. */
     private static final String GENERATOR = "MezzoSopranoClef";
+
+    /** A scratch file untouched for this long at startup belongs to a run that died. */
+    private static final long STALE_SCRATCH_MS = TimeUnit.HOURS.toMillis(1);
 
     public static ReplayRecorder get() {
         return INSTANCE;
     }
 
-    /** One connection's recording. Immutable except for the writer it owns. */
+    /** One connection's recording. Identified by {@link #id}, which is how the tap addresses it. */
     private static final class Session {
         final McprWriter writer;
         /** The connection this recording is reading. Dropped with the session, so nothing is pinned. */
@@ -68,7 +91,7 @@ public final class ReplayRecorder implements ReplayTap.Sink {
         final long startedAtNanos = System.nanoTime();
         final List<ReplayMarker> markers = new ArrayList<>();
         /** Packets this recording added that the server never sent — see {@link #inject}. */
-        final java.util.concurrent.atomic.AtomicLong injected = new java.util.concurrent.atomic.AtomicLong();
+        final AtomicLong injected = new AtomicLong();
         volatile boolean ended;
 
         Session(McprWriter writer, ChannelPipeline pipeline, long id) {
@@ -83,12 +106,22 @@ public final class ReplayRecorder implements ReplayTap.Sink {
     }
 
     /**
+     * Seals and event emission, off every thread that matters. Single-threaded so a queued seal and
+     * the events describing it stay in order.
+     */
+    private final ExecutorService worker = Executors.newSingleThreadExecutor(runnable -> {
+        Thread thread = new Thread(runnable, "clef-replay");
+        thread.setDaemon(true);
+        return thread;
+    });
+
+    private long nextSessionId = 1;
+    /**
      * Whether this build can record at all. Set by the client entrypoint of a target that carries
      * the {@code Connection} mixin the tap is installed from. Everywhere else the commands still
      * register and still answer — they just say honestly that the target cannot do it yet, which
      * beats the command vanishing from {@code help} on half the matrix.
      */
-    private long nextSessionId = 1;
     private volatile boolean supported;
     private volatile boolean armed;
     private volatile Session session;
@@ -96,6 +129,11 @@ public final class ReplayRecorder implements ReplayTap.Sink {
     private volatile double[] pose = {0, 0, 0, 0, 0};
     /** Last snapshot pushed in from the client thread; what sealing writes into the metadata. */
     private volatile ReplaySessionInfo info;
+    /**
+     * Which recording {@link #info} was read during. Metadata gathered against a different
+     * connection is not "a bit stale", it is wrong — see {@link #infoFor}.
+     */
+    private volatile long infoSession;
     /**
      * Inbound handler order, as evidence for {@code status}. Snapshotted when the tap is installed
      * (which is what a "recording never started" diagnosis needs) and replaced by the order at
@@ -117,6 +155,12 @@ public final class ReplayRecorder implements ReplayTap.Sink {
     public void enableOnThisTarget() {
         this.supported = true;
         this.armed = config().enabled;
+        sweepStaleScratch();
+        // Fabric's CLIENT_STOPPING only fires from Minecraft.stop(), and nothing stops this bot
+        // that way: e2e.sh kills the process, verify_versions.sh pkills it, and the launcher
+        // destroys it from its own shutdown hook. Without this, a kill with the connection still
+        // up loses the recording AND leaves its scratch file behind.
+        Runtime.getRuntime().addShutdownHook(new Thread(this::onJvmShutdown, "clef-replay-shutdown"));
         MezzoClef.LOG.info("Replay recording available (armed={}, dir={})", armed, replayDir());
     }
 
@@ -183,9 +227,8 @@ public final class ReplayRecorder implements ReplayTap.Sink {
      *
      * <p>Called from the client thread while packets are also arriving on the netty thread; the
      * writer serializes them and clamps timestamps, so the file stays ordered either way. Unlike
-     * {@link #record} this never ends the session on the size cap: stalling the game thread to zip
-     * a replay is a worse outcome than a slightly-over-budget file, and the next real packet trips
-     * the cap anyway.</p>
+     * {@link #record} this never trips the size cap: the cap's response is to end the recording,
+     * and the client thread is not somewhere to start that from. The next real packet trips it.</p>
      *
      * @return false if there is no recording to add to
      */
@@ -197,7 +240,8 @@ public final class ReplayRecorder implements ReplayTap.Sink {
             s.injected.incrementAndGet();
             return true;
         } catch (IOException e) {
-            abort(e);
+            MezzoClef.LOG.error("Replay self-tracking write failed", e);
+            endSession("error");
             return false;
         }
     }
@@ -221,30 +265,31 @@ public final class ReplayRecorder implements ReplayTap.Sink {
      *
      * <p>Called from a {@code Connection.channelActive} mixin, so it runs for <i>every</i>
      * connection this client opens, pings included. The tap itself only starts recording at login
-     * success, which is the filter that keeps a server-list ping from producing a replay.</p>
+     * success, which is the filter that keeps a server-list ping from producing a replay — and is
+     * also why nothing here may disturb a recording already in progress on another socket.</p>
      */
     public void install(ChannelPipeline pipeline) {
         if (!armed) return;
         try {
+            boolean idle = session == null;
             // Reported by replay.status either way: when a recording never starts, the handler
             // order is the first thing worth looking at, and "we could not find the decoder" is a
-            // very different problem from "we installed but saw no login success".
-            this.pipelineNames = List.copyOf(pipeline.names());
-            this.selfTrackState = "pending";
-            this.selfTrackDetail = null;
+            // very different problem from "we installed but saw no login success". Only while idle,
+            // so a status ping cannot overwrite what a live recording is reading.
+            if (idle) this.pipelineNames = List.copyOf(pipeline.names());
             String anchor = inboundCodecName(pipeline);
             // An in-memory (integrated server) pipeline has neither name: packets move as objects,
             // never as bytes, so there is nothing here to copy. Singleplayer is out of scope rather
             // than silently broken.
             if (anchor == null) {
                 MezzoClef.LOG.info("Replay tap skipped: no inbound codec slot in pipeline {}",
-                        pipelineNames);
+                        pipeline.names());
                 return;
             }
             if (pipeline.get(ReplayTap.NAME) != null) return;
             pipeline.addBefore(anchor, ReplayTap.NAME, new ReplayTap(this));
-            this.pipelineNames = List.copyOf(pipeline.names());
-            MezzoClef.LOG.info("Replay tap installed; inbound pipeline is now {}", pipelineNames);
+            if (idle) this.pipelineNames = List.copyOf(pipeline.names());
+            MezzoClef.LOG.info("Replay tap installed; inbound pipeline is now {}", pipeline.names());
         } catch (RuntimeException e) {
             // Losing the race against a pipeline being torn down is not worth a crash.
             MezzoClef.LOG.warn("Replay tap could not be installed: {}", e.toString());
@@ -268,67 +313,87 @@ public final class ReplayRecorder implements ReplayTap.Sink {
         return null;
     }
 
+    // ---- the tap's side of the contract ---------------------------------------------
+
     /**
      * Opens a recording. Called by the tap when login success goes past.
      *
-     * @return false if capture was disarmed in the meantime or the scratch file could not be made,
-     *         in which case the tap stays dormant for this connection
+     * @return the new session's id, or 0 if capture was disarmed in the meantime or the scratch
+     *         file could not be made, in which case the tap stays dormant for this connection
      */
     @Override
-    public synchronized boolean beginSession(ChannelPipeline pipeline) {
-        if (!armed) return false;
-        if (session != null) endSessionLocked("superseded");
-        try {
-            Path scratch = scratchDir().resolve("clef-" + STAMP.format(Instant.now()) + ".tmcpr");
-            Session started = new Session(new McprWriter(scratch), pipeline, nextSessionId++);
-            this.session = started;
-            // Now, not at install: this is when the codec slot has settled on its final name.
-            this.pipelineNames = List.copyOf(pipeline.names());
-            JsonObject data = new JsonObject();
-            data.addProperty("serverName", info().serverName());
-            data.addProperty("scratch", scratch.toString());
-            Events.emit("replay.started", data);
-            MezzoClef.LOG.info("Replay recording started -> {}", scratch);
-            return true;
-        } catch (IOException e) {
-            MezzoClef.LOG.error("Replay recording could not start", e);
-            return false;
+    public long beginSession(ChannelPipeline pipeline) {
+        Session started;
+        JsonObject data = new JsonObject();
+        synchronized (this) {
+            if (!armed) return 0L;
+            if (session != null) endSessionLocked("superseded");
+            try {
+                Path scratch = scratchDir().resolve("clef-" + STAMP.format(Instant.now()) + ".tmcpr");
+                started = new Session(new McprWriter(scratch), pipeline, nextSessionId++);
+                this.session = started;
+                // Now, not at install: this is when the codec slot has settled on its final name.
+                this.pipelineNames = List.copyOf(pipeline.names());
+                this.selfTrackState = "pending";
+                this.selfTrackDetail = null;
+                data.addProperty("serverName", infoFor(started).serverName());
+                data.addProperty("scratch", scratch.toString());
+            } catch (IOException e) {
+                MezzoClef.LOG.error("Replay recording could not start", e);
+                return 0L;
+            }
         }
+        MezzoClef.LOG.info("Replay recording started -> {}", started.writer.scratch());
+        // Emitted off the monitor and off this thread. Delivery is a blocking socket write with no
+        // write timeout, and this is the netty thread holding up the login-success packet itself:
+        // one subscriber that stops reading would otherwise stop the bot from finishing its join.
+        emitLater("replay.started", data);
+        return started.id;
     }
 
     /**
      * Appends one packet.
      *
-     * @return false when the recording has stopped (size cap, write error) and the tap should give
-     *         up for this connection
+     * @param token the session the calling tap opened; a tap whose recording has been superseded by
+     *              a newer connection must not append to the newer one's file
+     * @return false when this tap's recording is over (superseded, size cap, write error) and it
+     *         should give up for good
      */
     @Override
-    public boolean record(byte[] packet) {
+    public boolean record(long token, byte[] packet) {
         Session s = session;
-        if (s == null || s.ended) return false;
+        if (s == null || s.ended || s.id != token) return false;
         try {
             s.writer.write(s.elapsedMs(), packet, 0, packet.length);
         } catch (IOException e) {
-            abort(e);
+            MezzoClef.LOG.error("Replay recording aborted", e);
+            endSession(token, "error");
             return false;
         }
         long max = maxBytes();
         if (max > 0 && s.writer.bytes() >= max) {
-            endSession("size_limit");
+            endSession(token, "size_limit");
             return false;
         }
         return true;
     }
 
-    /** A recorder fault. Ends the recording without touching the connection it was reading. */
+    /** A recorder fault on the tap's side. Ends the recording without touching the connection. */
     @Override
-    public void abort(Throwable cause) {
+    public void abort(long token, Throwable cause) {
         MezzoClef.LOG.error("Replay recording aborted", cause);
-        endSession("error");
+        endSession(token, "error");
     }
 
-    /** Ends the recording, sealing it first when {@code replay.autoSave} is on. */
+    /** Ends {@code token}'s recording, if it is still the current one. */
     @Override
+    public synchronized void endSession(long token, String reason) {
+        Session s = session;
+        if (s == null || s.id != token) return;
+        endSessionLocked(reason);
+    }
+
+    /** Ends whatever is recording, whoever it belongs to. For disarm and shutdown. */
     public synchronized void endSession(String reason) {
         endSessionLocked(reason);
     }
@@ -339,18 +404,37 @@ public final class ReplayRecorder implements ReplayTap.Sink {
         s.ended = true;
         this.session = null;
 
+        long packets = s.writer.packets();
+        long bytes = s.writer.bytes();
+        boolean autoSave = config().autoSave && packets > 0;
+        String name = autoSave ? defaultName(s) : null;
+        ReplaySessionInfo meta = infoFor(s);
+
         JsonObject data = new JsonObject();
         data.addProperty("reason", reason);
         data.addProperty("durationMs", s.elapsedMs());
-        data.addProperty("packets", s.writer.packets());
-        data.addProperty("bytes", s.writer.bytes());
+        data.addProperty("packets", packets);
+        data.addProperty("bytes", bytes);
+        data.addProperty("autoSaving", autoSave);
+        MezzoClef.LOG.info("Replay recording stopped ({}) — {} packets, {} bytes",
+                reason, packets, bytes);
+
+        // Everything past this point is disk and socket work, and this is a netty or client thread.
+        // Sealing 512 MiB is a ten-to-twenty-second deflate; doing it here turns the size cap into
+        // a keep-alive timeout on the netty side and a visible freeze on the game side.
+        worker.execute(() -> finish(s, name, meta, data));
+    }
+
+    /** The slow half of ending a recording: emit, seal, close, delete. Worker thread only. */
+    private void finish(Session s, String name, ReplaySessionInfo meta, JsonObject stopped) {
+        Events.emit("replay.stopped", stopped);
         try {
-            if (config().autoSave && s.writer.packets() > 0) {
-                data.addProperty("saved", seal(s, defaultName()).path().toString());
+            if (name != null) {
+                SaveResult saved = seal(s, name, meta);
+                Events.emit("replay.saved", saved.toJson());
             }
         } catch (IOException e) {
             MezzoClef.LOG.error("Replay auto-save failed", e);
-            data.addProperty("error", String.valueOf(e.getMessage()));
         } finally {
             try {
                 s.writer.close();
@@ -359,9 +443,6 @@ public final class ReplayRecorder implements ReplayTap.Sink {
             }
             deleteQuietly(s.writer.scratch());
         }
-        Events.emit("replay.stopped", data);
-        MezzoClef.LOG.info("Replay recording stopped ({}) — {} packets, {} bytes",
-                reason, s.writer.packets(), s.writer.bytes());
     }
 
     // ---- saving ---------------------------------------------------------------------
@@ -371,6 +452,9 @@ public final class ReplayRecorder implements ReplayTap.Sink {
      * recording. Call it as often as you like; each call produces a complete replay ending at the
      * moment it was made.
      *
+     * <p>Runs the deflate on the calling thread: this is the control plane, the caller asked for a
+     * file, and it wants the path back. Automatic saves go to the worker instead.</p>
+     *
      * @param name file name without extension, or null for a timestamped default
      * @throws IllegalStateException if nothing is being recorded
      */
@@ -379,14 +463,9 @@ public final class ReplayRecorder implements ReplayTap.Sink {
         if (s == null || s.ended) {
             throw new IllegalStateException("not recording");
         }
-        int durationMs = s.elapsedMs();
-        Sealed sealed = seal(s, name == null || name.isBlank() ? defaultName() : name);
-        // Counts come from the seal, not from the writer's live totals: the recording has kept
-        // going while we zipped, and reporting numbers the file does not contain is a small lie
-        // that costs somebody an afternoon.
-        SaveResult result = new SaveResult(sealed.path(), durationMs, sealed.extent().packets(),
-                Files.size(sealed.path()));
-        Events.emit("replay.saved", result.toJson());
+        SaveResult result = seal(s, name == null || name.isBlank() ? defaultName(s) : name,
+                infoFor(s));
+        emitLater("replay.saved", result.toJson());
         return result;
     }
 
@@ -403,21 +482,22 @@ public final class ReplayRecorder implements ReplayTap.Sink {
         }
     }
 
-    private Sealed seal(Session s, String name) throws IOException {
+    private SaveResult seal(Session s, String name, ReplaySessionInfo meta) throws IOException {
         Path out = replayDir().resolve(sanitize(name) + ".mcpr");
-        McprWriter.ReplayMetadata meta =
-                new McprWriter.ReplayMetadata(info(), s.startedAtEpochMs, s.elapsedMs(), GENERATOR);
+        int durationMs = s.elapsedMs();
         List<ReplayMarker> markers;
         synchronized (s.markers) {
             markers = List.copyOf(s.markers);
         }
-        McprWriter.Extent extent = s.writer.seal(out, meta, markers);
+        McprWriter.Extent extent = s.writer.seal(out,
+                new McprWriter.ReplayMetadata(meta, s.startedAtEpochMs, durationMs, GENERATOR),
+                markers);
         MezzoClef.LOG.info("Replay sealed -> {} ({} packets)", out, extent.packets());
-        return new Sealed(out, extent);
+        // Counts come from the seal, not from the writer's live totals: the recording has kept
+        // going while we zipped, and reporting numbers the file does not contain is a small lie
+        // that costs somebody an afternoon.
+        return new SaveResult(out, durationMs, extent.packets(), Files.size(out));
     }
-
-    /** A sealed file and how much of the recording actually went into it. */
-    private record Sealed(Path path, McprWriter.Extent extent) {}
 
     /** Adds a timeline marker at the current point of the recording, at the bot's last known pose. */
     public ReplayMarker marker(String name) {
@@ -439,20 +519,32 @@ public final class ReplayRecorder implements ReplayTap.Sink {
      * reach into Minecraft from a netty or control-plane thread.
      */
     public void refresh(ReplaySessionInfo latest) {
-        if (latest != null) this.info = latest;
+        if (latest == null) return;
+        this.info = latest;
+        this.infoSession = sessionId();
     }
 
-    private ReplaySessionInfo info() {
+    /**
+     * The metadata to seal {@code s} with, or honest unknowns.
+     *
+     * <p>A snapshot is only usable for the recording it was taken during. Login success arrives on
+     * the netty thread and can beat the next client tick, so at the start of a recording the newest
+     * snapshot still describes the <i>previous</i> connection — and sealing a replay of server B
+     * with server A's name, player list and {@code selfId} would be a file that lies rather than a
+     * file that is vague.</p>
+     */
+    private ReplaySessionInfo infoFor(Session s) {
         ReplaySessionInfo current = this.info;
-        return current != null ? current
-                : ReplaySessionInfo.unknown(Platform.get().minecraftVersion(), -1);
+        long taken = this.infoSession;
+        if (current != null && taken == (s == null ? 0L : s.id)) return current;
+        return ReplaySessionInfo.unknown(Platform.get().minecraftVersion(), -1);
     }
 
     // ---- reporting ------------------------------------------------------------------
 
     public JsonObject status() {
         Session s = session;
-        ReplaySessionInfo current = info();
+        ReplaySessionInfo current = infoFor(s);
         JsonObject o = new JsonObject();
         o.addProperty("supported", supported);
         o.addProperty("armed", armed);
@@ -510,7 +602,61 @@ public final class ReplayRecorder implements ReplayTap.Sink {
         return out;
     }
 
+    // ---- shutdown -------------------------------------------------------------------
+
+    /**
+     * Last chance to keep a recording. Runs on SIGTERM, which is how every script in this repo
+     * stops the bot, and is the only stop path that reaches the code at all.
+     *
+     * <p>Bounded: a seal that cannot finish inside the grace period loses the replay but not the
+     * shutdown, and the scratch file it leaves behind is swept on the next start.</p>
+     */
+    private void onJvmShutdown() {
+        try {
+            endSession("shutdown");
+            worker.shutdown();
+            if (!worker.awaitTermination(30, TimeUnit.SECONDS)) {
+                MezzoClef.LOG.warn("Replay seal did not finish within the shutdown grace period");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (Throwable t) {
+            MezzoClef.LOG.warn("Replay shutdown handling failed: {}", t.toString());
+        }
+    }
+
+    /**
+     * Removes scratch files from runs that were killed before they could clean up. Anything still
+     * being written to is minutes fresh, so age is a safe discriminator even if another client is
+     * sharing this game directory.
+     */
+    private void sweepStaleScratch() {
+        try {
+            Path dir = scratchDir();
+            long cutoff = System.currentTimeMillis() - STALE_SCRATCH_MS;
+            try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir, "*.tmcpr")) {
+                for (Path p : stream) {
+                    if (modified(p) < cutoff) {
+                        MezzoClef.LOG.info("Removing stale replay scratch {}", p.getFileName());
+                        deleteQuietly(p);
+                    }
+                }
+            }
+        } catch (IOException e) {
+            MezzoClef.LOG.warn("Could not sweep replay scratch: {}", e.toString());
+        }
+    }
+
     // ---- paths and config -----------------------------------------------------------
+
+    /** Hands an event to the worker. See the threading note on this class for why. */
+    private void emitLater(String event, JsonObject data) {
+        try {
+            worker.execute(() -> Events.emit(event, data));
+        } catch (java.util.concurrent.RejectedExecutionException shuttingDown) {
+            // The JVM is on its way out and nobody is listening any more.
+        }
+    }
 
     private static ClefConfig.Replay config() {
         return MezzoClef.config().replay;
@@ -532,8 +678,8 @@ public final class ReplayRecorder implements ReplayTap.Sink {
         return mb <= 0 ? 0L : (long) mb * 1024L * 1024L;
     }
 
-    private String defaultName() {
-        return sanitize(info().serverName()) + "_" + STAMP.format(Instant.now());
+    private String defaultName(Session s) {
+        return sanitize(infoFor(s).serverName()) + "_" + STAMP.format(Instant.now());
     }
 
     /**

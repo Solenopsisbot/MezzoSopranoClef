@@ -24,10 +24,12 @@ import net.minecraft.client.multiplayer.ServerData;
  */
 public final class ReplayMetadataSource {
 
-    /** Once a second is plenty: none of this changes fast, and the tab list walk is the only cost. */
-    private static final int INTERVAL_TICKS = 20;
+    /** How often the tab list is walked. Everything else is refreshed every tick. */
+    private static final int PLAYER_LIST_TICKS = 20;
 
     private static int ticks;
+    /** Last tab-list walk, reused between rebuilds so the per-tick refresh stays cheap. */
+    private static List<String> players = List.of();
 
     /** Called from the client tick. Skipped entirely while replay capture is disarmed. */
     public static void tick(Minecraft mc) {
@@ -39,20 +41,26 @@ public final class ReplayMetadataSource {
             recorder.pose(player.getX(), player.getY(), player.getZ(),
                     player.getYRot(), player.getXRot());
         }
-        if (++ticks < INTERVAL_TICKS) return;
-        ticks = 0;
+        // Every tick, not every second. Login success arrives on the netty thread and the metadata
+        // snapshot is only valid for the recording it was taken during, so a one-second refresh
+        // meant a replay sealed early in a session carried the *previous* server's name, player
+        // list and selfId — or nothing at all on a first connect. A tick-wide window closes that;
+        // the recorder's session check covers what is left.
+        if (++ticks >= PLAYER_LIST_TICKS) {
+            ticks = 0;
+            players = readPlayers(mc);
+        }
         recorder.refresh(capture(mc));
     }
 
-    /** Reads the current session facts. Client thread only. */
+    /**
+     * Reads the current session facts. Client thread only.
+     *
+     * <p>Uses the cached player list: the tab-list walk is the only part that scales with the
+     * server, and a UUID appearing a second late in a replay's metadata costs nothing, while the
+     * server name and {@code selfId} being a second stale costs correctness.</p>
+     */
     public static ReplaySessionInfo capture(Minecraft mc) {
-        ClientPacketListener connection = mc.getConnection();
-        List<String> players = new ArrayList<>();
-        if (connection != null) {
-            for (PlayerInfo info : connection.getOnlinePlayers()) {
-                players.add(info.getProfile().id().toString());
-            }
-        }
         return new ReplaySessionInfo(
                 mc.isLocalServer(),
                 serverName(mc),
@@ -62,6 +70,17 @@ public final class ReplayMetadataSource {
                 SharedConstants.getProtocolVersion(),
                 mc.player != null ? mc.player.getId() : -1,
                 players);
+    }
+
+    /** Walks the tab list. The one part of a snapshot that is worth doing less often. */
+    private static List<String> readPlayers(Minecraft mc) {
+        ClientPacketListener connection = mc.getConnection();
+        if (connection == null) return List.of();
+        List<String> uuids = new ArrayList<>();
+        for (PlayerInfo info : connection.getOnlinePlayers()) {
+            uuids.add(info.getProfile().id().toString());
+        }
+        return uuids;
     }
 
     private static String serverName(Minecraft mc) {

@@ -79,7 +79,7 @@ public final class SelfTrack {
     private static float yRot, xRot;
     private static byte headRot;
     private static boolean swinging;
-    private static int idleTicks;
+    private static int ticksSinceKeyframe;
     private static final List<ItemStack> equipment = new ArrayList<>();
 
     /** Called from the client tick. Cheap no-op unless a recording is actually running. */
@@ -125,7 +125,7 @@ public final class SelfTrack {
         equipment.clear();
         for (EquipmentSlot slot : EquipmentSlot.VALUES) equipment.add(player.getItemBySlot(slot).copy());
         swinging = player.swinging;
-        idleTicks = 0;
+        ticksSinceKeyframe = 0;
     }
 
     private static void move(ReplayRecorder recorder, ProtocolInfo<ClientGamePacketListener> protocol,
@@ -133,17 +133,20 @@ public final class SelfTrack {
         boolean moved = player.distanceToSqr(x, y, z) > MOVE_EPSILON_SQ
                 || Math.abs(player.getYRot() - yRot) > ROT_EPSILON
                 || Math.abs(player.getXRot() - xRot) > ROT_EPSILON;
-        if (moved || ++idleTicks >= KEYFRAME_TICKS) {
+        // Counted unconditionally, and reset only when the keyframe fires. Folding it into the
+        // `moved ||` short-circuit meant a bot that never stopped moving — pathing, or strafing in
+        // a fight — never evaluated it and so never re-sent its entity data at all, which is the
+        // only thing here that carries sneaking, sprinting, swimming, fire and invisibility.
+        boolean keyframe = ++ticksSinceKeyframe >= KEYFRAME_TICKS;
+        if (moved || keyframe) {
             emit(recorder, protocol, ClientboundEntityPositionSyncPacket.of(player));
             remember(player);
-            if (idleTicks >= KEYFRAME_TICKS) {
-                // Piggyback the entity-data refresh on the same beat. It carries pose (sneaking,
-                // swimming, the crawl) which nothing else here reports, and re-reading the
-                // non-default values is side-effect free — unlike packDirty(), which consumes the
-                // dirty flags the client is entitled to keep.
-                emitEntityData(recorder, protocol, player);
-                idleTicks = 0;
-            }
+        }
+        if (keyframe) {
+            // Re-reading the non-default values is side-effect free — unlike packDirty(), which
+            // consumes the dirty flags the client is entitled to keep.
+            emitEntityData(recorder, protocol, player);
+            ticksSinceKeyframe = 0;
         }
 
         byte head = (byte) Math.floor(player.getYHeadRot() * 256.0f / 360.0f);
@@ -296,7 +299,7 @@ public final class SelfTrack {
         entityId = -1;
         broken = false;
         verified = false;
-        idleTicks = 0;
+        ticksSinceKeyframe = 0;
         swinging = false;
         headRot = 0;
         equipment.clear();

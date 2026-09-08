@@ -137,6 +137,18 @@ Bringing it to a new target is three small things in that release's module:
 4. `ReplayRecorder.get().enableOnThisTarget()` in that module's `ClefClient`, plus the per-tick
    `ReplayMetadataSource.tick(mc)` and `SelfTrack.tick(mc)` calls.
 
+Two invariants in the shared half that a port must not quietly break:
+
+* **The login-success gate is one-shot per connection.** Clientbound `0x02` is login success in the
+  LOGIN phase and `ClientboundAnimatePacket` in the PLAY phase, so a gate that re-arms after a
+  recording stops opens a second one starting with an arm swing — an `.mcpr` that opens and cannot
+  play, on a loop if `autoSave` and a size cap are both set.
+* **Nothing slow runs on the netty or client thread.** Every automatic seal and every event
+  emission goes to the `clef-replay` worker. Deflating half a gigabyte takes ten to twenty seconds;
+  on the netty thread that is upstream of the decoder, so keep-alives stop and the server kicks the
+  bot for timing out, and on the client thread it is a visible freeze. Event delivery is a blocking
+  socket write with no write timeout, so it belongs there too.
+
 The commands are registered from `ControlServer` and therefore already exist on every target;
 without those three they answer `{supported:false}` and say why, which is the intended behaviour
 for a half-ported feature rather than something to hide.
