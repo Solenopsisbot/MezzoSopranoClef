@@ -5,7 +5,7 @@
 # assert it joined the world and can take a GPU-free screenshot.
 #
 # Requires: a JDK able to run the MC server for that version (see scripts/pick_server_java.py),
-# Python 3, network access. The bot client is launched via `gradlew runClient`; first run
+# Python 3, network access. The bot client is launched via `gradlew :runClient`; first run
 # downloads MC assets and can take a while. For the whole version matrix in one client boot,
 # use scripts/verify_versions.sh instead.
 #
@@ -13,7 +13,7 @@
 #      SERVER_VERSION (protocol the bot selects: "auto", "native", or a release; default = MC_VERSION),
 #      WS_PORT (8731), BOT_NAME (ClefBot),
 #      SERVER_JAVA (java binary used to run the server; default = auto-picked for MC_VERSION),
-#      CLEF_RUN_TASK (gradle task that boots the bot; default `runClient` = the newest-version
+#      CLEF_RUN_TASK (gradle task that boots the bot; default `:runClient` = the newest-version
 #        client. Use e.g. `:versions:fabric-1.21.11:runClient` to test a native older build),
 #      CLEF_RUN_DIR (that task's run directory; default `run`),
 #      MC_PORT (25565), SERVER_DIR (default e2e/servers/$MC_VERSION).
@@ -32,7 +32,12 @@ WS_PORT="${WS_PORT:-8731}"
 MC_PORT="${MC_PORT:-25565}"
 BOT_NAME="${BOT_NAME:-ClefBot}"
 SERVER_JAVA="${SERVER_JAVA:-$(python3 "$ROOT/scripts/pick_server_java.py" "$MC_VERSION")}"
-CLEF_RUN_TASK="${CLEF_RUN_TASK:-runClient}"
+# NOTE the leading colon: every version module also defines runClient, so the unqualified name
+# launches all 24 clients at once. The first one to boot claims the control port with its own
+# config, and the probe then fails the handshake against a bot from a different module — which
+# reads as "bad token", an auth bug that is not there. verify_versions.sh and verify_native.sh
+# already qualify the task; this one did not.
+CLEF_RUN_TASK="${CLEF_RUN_TASK:-:runClient}"
 CLEF_RUN_DIR="${CLEF_RUN_DIR:-run}"
 SERVER_DIR="${SERVER_DIR:-$ROOT/e2e/servers/$MC_VERSION}"
 mkdir -p "$ROOT/e2e"

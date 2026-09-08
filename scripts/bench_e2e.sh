@@ -13,7 +13,7 @@ mkdir -p "$ROOT/run/config"; : > "$ROOT/e2e/bench.out"
 SRV=""
 
 # --- only ever kill processes THIS script started -------------------------------------
-# `./gradlew runClient` forks the client JVM out of the Gradle daemon, so killing the wrapper
+# `./gradlew :runClient` forks the client JVM out of the Gradle daemon, so killing the wrapper
 # leaves the bot running. The obvious workaround — `pkill -f knot.KnotClient` — kills every
 # Fabric client on the machine, including other people's bots and other agents' test runs. It
 # has done exactly that. So: snapshot the matching PIDs before launching anything, and only
@@ -74,7 +74,8 @@ run_bot() {  # $1=label  $2=extra gradle args
   local label="$1" extra="$2"
   local before; before=$(grep -c 'joined the game' "$SDIR/server.log" 2>/dev/null || true); before=${before:-0}
   echo "[bench] launching bot run '$label' (args: ${extra:-none})..."
-  ( ./gradlew runClient --console=plain --offline $extra > "$ROOT/e2e/bot-$label.log" 2>&1 ) &
+  # Leading colon: unqualified, `runClient` launches every version module's client at once.
+  ( ./gradlew :runClient --console=plain --offline $extra > "$ROOT/e2e/bot-$label.log" 2>&1 ) &
   local gpid=$!
   for _ in $(seq 1 200); do
     local now; now=$(grep -c 'joined the game' "$SDIR/server.log" 2>/dev/null || true); now=${now:-0}
