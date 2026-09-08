@@ -107,6 +107,24 @@ await bot.shootAt(skeleton.id, { shots: 3 });
 await bot.meleeWhile(skeleton.id, { maxMs: 4000, stopBelowHealth: 6 });
 ```
 
+```python
+# Replay recording: arm it, connect, then seal as often as you like while the bot keeps playing.
+bot.replay_record(True)                                         # takes effect on the NEXT connect
+bot.replay_marker("about to fight the dragon")
+snap = bot.replay_save("dragon-attempt-3")                      # a complete .mcpr, mid-run
+```
+
+```ts
+await bot.replayRecord(true);                                   // takes effect on the NEXT connect
+await bot.replayMarker("about to fight the dragon");
+const snap = await bot.replaySave("dragon-attempt-3");          // a complete .mcpr, mid-run
+```
+
+`replay_record` / `replayRecord` arms capture rather than starting it: a replay has to begin at a
+connection's login to be playable at all, so it applies from the next `connect`. `replay_save` is
+the one that works at any moment — each call seals everything recorded so far into a finished
+ReplayMod-openable file without interrupting the recording.
+
 Both combat wrappers raise the per-call timeout to match the request, since the client default
 (30 s) is shorter than a volley of arrows. `combatStop()` / `combat_stop()` interrupts one — from a
 second connection if the first is blocked waiting.

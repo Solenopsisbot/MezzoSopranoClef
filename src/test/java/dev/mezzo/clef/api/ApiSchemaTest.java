@@ -9,6 +9,7 @@ import dev.mezzo.clef.api.commands.ActionCommands;
 import dev.mezzo.clef.api.commands.CombatCommands;
 import dev.mezzo.clef.api.commands.CoreCommands;
 import dev.mezzo.clef.api.commands.CraftCommands;
+import dev.mezzo.clef.api.commands.ReplayCommands;
 import dev.mezzo.clef.api.commands.UiCommands;
 import dev.mezzo.clef.api.commands.WorldCommands;
 import org.junit.jupiter.api.Test;
@@ -36,6 +37,7 @@ class ApiSchemaTest {
         WorldCommands.registerAll(d);
         CraftCommands.registerAll(d);
         CombatCommands.registerAll(d);
+        ReplayCommands.registerAll(d);
         return d;
     }
 

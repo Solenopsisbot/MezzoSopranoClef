@@ -12,6 +12,9 @@ import dev.mezzo.clef.bot.ServerConnector;
 import dev.mezzo.clef.config.ClefConfig;
 import dev.mezzo.clef.headless.HeadlessController;
 import dev.mezzo.clef.nav.BaritoneNavigator;
+import dev.mezzo.clef.replay.ReplayMetadataSource;
+import dev.mezzo.clef.replay.ReplayRecorder;
+import dev.mezzo.clef.replay.SelfTrack;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
@@ -61,6 +64,9 @@ public final class ClefClient implements ClientModInitializer {
         // Packet-sourced events are raised from mixins, which have no route to this object graph.
         Events.bind(server);
         this.eventEmitter = new EventEmitter(server, services, cfg);
+        // This target carries the Connection mixin the replay tap is installed from, so recording
+        // is a real option here; the recorder reads replay.enabled itself.
+        ReplayRecorder.get().enableOnThisTarget();
 
         if (cfg.control.enabled) {
             try {
@@ -72,6 +78,8 @@ public final class ClefClient implements ClientModInitializer {
         }
 
         ClientLifecycleEvents.CLIENT_STOPPING.register(mc -> {
+            // Before unbinding events, so a replay.stopped (and any auto-save) still gets out.
+            ReplayRecorder.get().endSession("shutdown");
             Events.unbind();
             if (control != null) control.stop();
             if (tokenRefresher != null) tokenRefresher.shutdownNow();
@@ -224,6 +232,10 @@ public final class ClefClient implements ClientModInitializer {
         services.combat.tick(mc);
         services.craft.tick(mc);
         eventEmitter.tick(mc);
+        ReplayMetadataSource.tick(mc);
+        // After the metadata refresh, so a freshly-joined world has its selfId before the body
+        // that selfId names gets written.
+        SelfTrack.tick(mc);
 
         // First-ever launch shows a one-time accessibility onboarding screen BEFORE the title;
         // a headless bot has no GUI to dismiss it, so do it ourselves (and stop it re-showing).
