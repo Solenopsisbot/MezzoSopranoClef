@@ -25,10 +25,12 @@ The client is built against **Minecraft 26.2**, Fabric, and **Java 25**, using M
 ## Run
 
 ```bash
-./gradlew runClient
-./gradlew runClient -Dmezzoclef.dashboard=true
+./gradlew :runClient
+./gradlew :runClient -Dmezzoclef.dashboard=true
 python3 scripts/ws_probe.py
 ```
+
+The leading colon matters: every version module defines a `runClient` of its own, so the bare name launches all two dozen clients at once and they fight over the control port.
 
 The first run downloads Minecraft assets. Configuration is written to `run/config/mezzoclef.json`. Set `connection.autoConnect` and `connection.serverHost`, or pass `-Dmezzoclef.connect.auto=true -Dmezzoclef.connect.host=host:port`. `connection.serverVersion` (or `-Dmezzoclef.connect.version=`) picks the protocol: `auto` (default, ping and match), `native`, or a release such as `1.12.2`.
 
