@@ -5,6 +5,7 @@ import com.google.gson.JsonObject;
 import dev.mezzo.clef.api.ApiException;
 import dev.mezzo.clef.api.CommandDispatcher;
 import dev.mezzo.clef.bot.ActionManager;
+import dev.mezzo.clef.nav.BaritoneNavigator;
 import dev.mezzo.clef.bot.EntityMotion;
 import dev.mezzo.clef.bot.Hotbar;
 import dev.mezzo.clef.bot.RecipeIndex;
@@ -62,6 +63,18 @@ public final class ActionCommands {
                     BlockPos pos = new BlockPos(ctx.requireInt("x"), ctx.requireInt("y"), ctx.requireInt("z"));
                     Direction face = parseFace(ctx.str("face", "up"));
                     boolean wait = ctx.bool("wait", false);
+                    // Let Baritone own navigation, tool selection, aiming, and mining whenever its
+                    // command bridge is available. Its planner handles walls and re-aiming safely.
+                    if (ctx.server.services.navigator instanceof BaritoneNavigator baritone
+                            && baritone.blockArgumentsSafe()) {
+                        ctx.server.services.input.clear();
+                        baritone.runCommand("mine " + pos.getX() + " " + pos.getY() + " " + pos.getZ());
+                        JsonObject delegated = new JsonObject();
+                        delegated.addProperty("mining", true);
+                        delegated.addProperty("backend", "baritone");
+                        delegated.addProperty("wait", wait);
+                        return delegated;
+                    }
                     CompletableFuture<ActionManager.MineResult> done = ctx.onMain(() -> {
                         Minecraft mc = Minecraft.getInstance();
                         if (mc.player == null) throw ApiException.notInWorld();

@@ -13,6 +13,7 @@ import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.phys.HitResult;
 
 /**
  * Discrete and continuous world interactions. The continuous ones (block breaking, place
@@ -104,6 +105,14 @@ public final class ActionManager {
                     + net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(state.getBlock()), 0);
             return result;
         }
+        if (!canReachAndSee(mc, pos)) {
+            reportOnce(pos, false, "cant_break", "block is out of reach or behind another block", 0);
+            return result;
+        }
+        if (state.requiresCorrectToolForDrops() && !mc.player.getMainHandItem().isCorrectToolForDrops(state)) {
+            reportOnce(pos, false, "cant_break", "held item is not a suitable tool", 0);
+            return result;
+        }
 
         this.miningFace = face;
         this.mining = true;
@@ -145,6 +154,12 @@ public final class ActionManager {
             finish(true, null, null);
             return;
         }
+        if (!canReachAndSee(mc, miningPos)) {
+            mining = false;
+            mc.gameMode.stopDestroyBlock();
+            finish(false, "cant_break", "lost line of sight or moved out of reach");
+            return;
+        }
         if (++miningTicks > MAX_MINING_TICKS) {
             MezzoClef.LOG.warn("Mining {} timed out after {} ticks — giving up", miningPos, MAX_MINING_TICKS);
             mining = false;
@@ -160,6 +175,15 @@ public final class ActionManager {
             mc.gameMode.continueDestroyBlock(miningPos, miningFace);
         }
         mc.player.swing(InteractionHand.MAIN_HAND);
+    }
+
+    /** Vanilla only accepts a real target in reach; keep the held destroy operation equally strict. */
+    private static boolean canReachAndSee(Minecraft mc, BlockPos pos) {
+        Vec3 eye = mc.player.getEyePosition();
+        if (eye.distanceToSqr(Vec3.atCenterOf(pos)) > 36.0) return false;
+        HitResult hit = mc.player.pick(6.0, 0.0f, false);
+        return hit.getType() == HitResult.Type.BLOCK
+                && ((BlockHitResult) hit).getBlockPos().equals(pos);
     }
 
     /** Emits the completion for the in-flight mine, if there is one. */
