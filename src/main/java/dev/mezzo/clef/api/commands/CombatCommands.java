@@ -4,6 +4,7 @@ import com.google.gson.JsonObject;
 import dev.mezzo.clef.api.ApiException;
 import dev.mezzo.clef.api.CommandDispatcher;
 import dev.mezzo.clef.bot.CombatController;
+import dev.mezzo.clef.nav.BaritoneNavigator;
 import net.minecraft.client.Minecraft;
 
 import java.util.concurrent.CompletableFuture;
@@ -49,8 +50,10 @@ public final class CombatCommands {
 
                     CombatController.ShootRequest request =
                             new CombatController.ShootRequest(entityId, lead, charge, shots, maxRange);
-                    CompletableFuture<CombatController.Result> done = ctx.onMain(() ->
-                            ctx.server.services.combat.startShoot(Minecraft.getInstance(), request));
+                    CompletableFuture<CombatController.Result> done = ctx.onMain(() -> {
+                        steerBaritone(ctx, entityId);
+                        return ctx.server.services.combat.startShoot(Minecraft.getInstance(), request);
+                    });
                     if (!wait) return started("shootAt", entityId);
                     return done.get(waitMs(CombatController.shootBudgetTicks(shots, charge)),
                             TimeUnit.MILLISECONDS).toJson();
@@ -73,8 +76,10 @@ public final class CombatCommands {
 
                     CombatController.MeleeRequest request =
                             new CombatController.MeleeRequest(entityId, maxMs, reach, stopBelowHealth);
-                    CompletableFuture<CombatController.Result> done = ctx.onMain(() ->
-                            ctx.server.services.combat.startMelee(Minecraft.getInstance(), request));
+                    CompletableFuture<CombatController.Result> done = ctx.onMain(() -> {
+                        steerBaritone(ctx, entityId);
+                        return ctx.server.services.combat.startMelee(Minecraft.getInstance(), request);
+                    });
                     if (!wait) return started("meleeWhile", entityId);
                     return done.get(waitMs(CombatController.meleeBudgetTicks(maxMs)),
                             TimeUnit.MILLISECONDS).toJson();
@@ -112,6 +117,17 @@ public final class CombatCommands {
         o.addProperty("kind", kind);
         o.addProperty("entityId", entityId);
         return o;
+    }
+
+    private static void steerBaritone(dev.mezzo.clef.api.CommandContext ctx, int entityId) {
+        if (!(ctx.server.services.navigator instanceof BaritoneNavigator b) || !b.isAvailable()) return;
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.level == null) return;
+        var target = mc.level.getEntity(entityId);
+        if (target != null) {
+            ctx.server.services.input.clear();
+            b.runCommand("fight " + target.getName().getString());
+        }
     }
 
     private CombatCommands() {}
